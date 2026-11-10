@@ -1,0 +1,18 @@
+# 交易引擎配置
+universe: [BTC, ETH, SOL, BNB, XRP, DOGE, ADA, AVAX, LINK, SUI, NEAR, APT, ARB, OP, LTC]
+start: "2024-11-01"
+lookback_days: 730
+
+# 成本(bps)
+costs:
+  taker_bps: 4.5
+  maker_bps: 1.5
+  slippage_bps: 2.0
+  use_maker: false
+
+# 策略参数
+target_vol: 0.25        # 组合年化波动目标
+trend_fast: 10          # 趋势快线(日)
+trend_slow: 50          # 趋势慢线(日)—— 参数平台核心:fast 5~20 都成立
+max_leverage: 1.0       # 最大总敞口倍数
+initial_equity: 10000

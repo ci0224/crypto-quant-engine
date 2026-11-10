@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+data/cache/
+data/results/
+data/live/
+data/*.log
+.env
+*.pem
+secrets*
