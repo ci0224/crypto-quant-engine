@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .. import pipeline, registry
+from .. import ledger, pipeline, registry
 from ..config import Config, Costs
 from ..data import hyperliquid as hl
 from ..strategies import library as S
@@ -106,34 +106,102 @@ def tick(stgy):
             ma = px5.rolling(20).mean()
             sd = px5.rolling(20).std(ddof=0)
             low_band = ma - 2 * sd
+            up_band = ma + 2 * sd
             last_t = px5.index[-1]
             key = f"{c}:{last_t.isoformat()}"
-            sig = px5.iloc[-1] < low_band.iloc[-1]
+            # 状态机(与回测 boll_state 一致):跌破下轨→1,站上上轨→-1,回到中轨→0
+            st_key = f"bstate:{c}"
+            prev = int(st.get(st_key, 0))
+            cl, mid = float(px5.iloc[-1]), float(ma.iloc[-1])
+            if cl < float(low_band.iloc[-1]):
+                cur = 1
+            elif cl > float(up_band.iloc[-1]):
+                cur = -1
+            elif prev == 1 and cl >= mid:
+                cur = 0
+            elif prev == -1 and cl <= mid:
+                cur = 0
+            else:
+                cur = prev
+            st[st_key] = cur
+            sig = (cur > 0)
             hour = last_t.hour
             if sig and 8 <= hour < 20 and key not in st["orders"]:
                 ref = float(px5.iloc[-1])
                 st["orders"][key] = {"coin": c, "ref": ref, "limit": ref * (1 - 0.0100),
                                      "target": ref * (1 - 0.0100) * (1 + 0.0120),
-                                     "ts": time.time(), "filled": False}
-        # 用最新价检查成交/止盈
+                                     "ts": time.time(), "filled": False,
+                                     "sid": stgy["id"], "sig_ts": (last_t + pd.Timedelta(minutes=5)).timestamp()}
+                ledger.add(sid=stgy["id"], coin=c, source="loop", kind="signal",
+                           signal_ts=last_t.timestamp(), ref_px=ref,
+                           limit_px=ref * (1 - 0.0100),
+                           target_px=ref * (1 - 0.0100) * (1 + 0.0120),
+                           reason="signal")
+        # 用 1m K 线检查成交/止盈(与回测同精度;只看 5 分钟采样会漏掉瞬时下探)
         mids = hl.all_mids()
         for k, o in list(st["orders"].items()):
             px = mids.get(o["coin"])
-            if not px:
+            c1 = _candles(o["coin"], "1m", 120)
+            if c1 is None or len(c1) < 5:
                 continue
-            if not o["filled"] and px <= o["limit"]:
-                o["filled"] = True
-                o["fill_ts"] = time.time()
+            # 挂单有效期 5 分钟(与回测一致)
+            if not o["filled"]:
+                sig_t = pd.Timestamp(o["sig_ts"], unit="s", tz="UTC")
+                # 信号 bar 收盘后才挂单 → 只在其后的 5 分钟内判定成交(避免前视)
+                win = c1.loc[sig_t: sig_t + pd.Timedelta(minutes=4)]
+                if len(win) == 0:
+                    continue
+                hit = win.index[win["low"] <= o["limit"]]
+                if len(hit):
+                    o["filled"] = True
+                    o["fill_ts"] = hit[0].timestamp()
+                elif sig_t + pd.Timedelta(minutes=5) < c1.index[-1]:
+                    st["orders"].pop(k)          # 5 分钟未成交 → 撤单
+                    continue
+            if px is None:
+                continue
             if o["filled"]:
                 if px >= o["target"]:
-                    st["pnl_bp"].append(120 - FEE_BP["deep_limit"])
+                    net = 120 - FEE_BP["deep_limit"]
+                    st["pnl_bp"].append(net)
                     st["trades"] += 1
+                    ledger.add(sid=o["sid"], coin=o["coin"], source="loop", kind="trade",
+                               signal_ts=o["sig_ts"], ref_px=o["ref"], limit_px=o["limit"],
+                               target_px=o["target"], fill_ts=o.get("fill_ts"),
+                               fill_px=o["limit"], exit_ts=time.time(), exit_px=o["target"],
+                               hold_min=(time.time() - o.get("fill_ts", time.time())) / 60,
+                               gross_bp=120.0, fee_bp=FEE_BP["deep_limit"], net_bp=net,
+                               reason="target")
                     st["orders"].pop(k)
                 elif time.time() - o.get("fill_ts", time.time()) > 55 * 60:
-                    pnl = (px / o["limit"] - 1) * 1e4 - FEE_BP["deep_limit"]
-                    st["pnl_bp"].append(pnl)
-                    st["trades"] += 1
-                    st["orders"].pop(k)
+                    # 超时:挂一个"回到 55 分钟收盘价"的限价单(最多等 240 分钟)
+                    if not o.get("rest_px"):
+                        o["rest_px"] = px
+                        o["rest_ts"] = time.time()
+                    elif px >= o["rest_px"]:
+                        pnl = (o["rest_px"] / o["limit"] - 1) * 1e4 - FEE_BP["deep_limit"]
+                        st["pnl_bp"].append(pnl)
+                        st["trades"] += 1
+                        ledger.add(sid=o["sid"], coin=o["coin"], source="loop", kind="trade",
+                                   signal_ts=o["sig_ts"], ref_px=o["ref"], limit_px=o["limit"],
+                                   target_px=o["target"], fill_ts=o.get("fill_ts"),
+                                   fill_px=o["limit"], exit_ts=time.time(), exit_px=o["rest_px"],
+                                   hold_min=(time.time() - o.get("fill_ts", time.time())) / 60,
+                                   gross_bp=(o["rest_px"] / o["limit"] - 1) * 1e4,
+                                   fee_bp=FEE_BP["deep_limit"], net_bp=pnl, reason="timeout_maker")
+                        st["orders"].pop(k)
+                    elif time.time() - o["rest_ts"] > 240 * 60:
+                        pnl = (px / o["limit"] - 1) * 1e4 - FEE_BP["deep_limit"]
+                        st["pnl_bp"].append(pnl)
+                        st["trades"] += 1
+                        ledger.add(sid=o["sid"], coin=o["coin"], source="loop", kind="trade",
+                                   signal_ts=o["sig_ts"], ref_px=o["ref"], limit_px=o["limit"],
+                                   target_px=o["target"], fill_ts=o.get("fill_ts"),
+                                   fill_px=o["limit"], exit_ts=time.time(), exit_px=px,
+                                   hold_min=(time.time() - o.get("fill_ts", time.time())) / 60,
+                                   gross_bp=(px / o["limit"] - 1) * 1e4,
+                                   fee_bp=FEE_BP["deep_limit"], net_bp=pnl, reason="stuck")
+                        st["orders"].pop(k)
         # 清理 6 小时前的未成交挂单
         for k, o in list(st["orders"].items()):
             if not o["filled"] and time.time() - o["ts"] > 6 * 3600:
