@@ -29,6 +29,12 @@ class TestnetExec:
         self.ex = Exchange(Account.from_key(_env()["HL_API_KEY"]), TESTNET,
                            account_address=MASTER)
         self.info = Info(TESTNET, skip_ws=True)
+        self._dec = {}
+        try:
+            for a in self.info.meta()["universe"]:
+                self._dec[a["name"]] = int(a.get("szDecimals", 3))
+        except Exception:
+            pass
 
     def mid(self, coin: str) -> float:
         return float(self.info.all_mids()[coin])
@@ -62,6 +68,20 @@ class TestnetExec:
         except (KeyError, IndexError, TypeError):
             pass
         return {"oid": oid, "raw": res}
+
+
+    def place_market(self, coin: str, is_buy: bool, notional: float):
+        """市价单(HL 用激进价 + IOC 模拟市价)。返回成交价/数量。"""
+        mid = self.mid(coin)
+        px = mid * (1.005 if is_buy else 0.995)
+        sz = notional / mid
+        sz = round(sz, self._dec.get(coin, 3))
+        px = round(px, 1 if coin == "BTC" else 2)
+        r = self.ex.order(coin, is_buy, sz, px, {"limit": {"tif": "Ioc"}}, reduce_only=False)
+        st = (r.get("response") or {}).get("data", {}).get("statuses", [{}])[0]
+        filled = st.get("filled") or {}
+        return {"px": float(filled.get("avgPx") or px), "sz": float(filled.get("totalSz") or sz),
+                "oid": filled.get("oid"), "raw": r}
 
     def cancel(self, coin: str, oid: int) -> dict:
         try:

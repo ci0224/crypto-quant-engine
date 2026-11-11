@@ -79,7 +79,10 @@ def _tn():
 
 def tick(stgy):
     sid, name, fam = stgy["id"], stgy["name"], stgy["family"]
-    if ((stgy.get("spec") or {}).get("venue") == "testnet"):
+    _sp = stgy.get("spec") or {}
+    if _sp.get("venue") == "testnet" and _sp.get("family") == "breakout":
+        return tick_testnet_breakout(stgy)
+    if _sp.get("venue") == "testnet":
         return tick_testnet(stgy)
     st, path = _state(sid)
     spec = stgy["spec"] or {}
@@ -271,6 +274,66 @@ def _candles_df(coin, interval="5m", days=2):
         return hl.candles(coin, interval, days)
     except Exception:
         return None
+
+
+def tick_testnet_breakout(stgy):
+    """venue=testnet + family=breakout:1h 突破 → 市价进;跌破中轨 → 市价出。"""
+    sid = stgy["id"]
+    ex = _tn()
+    st, path = _state(sid)
+    st.setdefault("pos", {})
+    spec = stgy["spec"] or {}
+    notional = float(spec.get("notional_usd") or 20.0)
+    kind = spec.get("signal") or "atr"
+    notes = []
+    for c in stgy["symbols"]:
+        df = _candles_df(c, "1h", 30)
+        if df is None or len(df) < 60:
+            continue
+        cl = df["close"]
+        last = float(cl.iloc[-1])
+        ema20 = float(cl.ewm(span=20, adjust=False).mean().iloc[-1])
+        if kind == "atr":
+            tr = float((df["high"] - df["low"]).ewm(alpha=1 / 20, adjust=False).mean().iloc[-1])
+            entry = last > ema20 + 2 * tr
+        else:
+            ma = float(cl.rolling(20).mean().iloc[-1])
+            sd = float(cl.rolling(20).std().iloc[-1])
+            entry = last > ma + 2 * sd
+        pos = st["pos"].get(c)
+        if pos is None and entry:
+            r = ex.place_market(c, True, notional)
+            st["pos"][c] = {"entry_px": r["px"], "entry_ts": time.time(), "sz": r["sz"]}
+            ledger.add(sid=sid, coin=c, source="testnet", kind="signal",
+                       signal_ts=df.index[-1].timestamp(), ref_px=last, limit_px=r["px"])
+            notes.append(f"{c} 市价买入 {r['sz']} @ {r['px']:.2f}")
+        elif pos is not None and last < ema20:
+            r = ex.place_market(c, False, pos["sz"] * pos["entry_px"])
+            gross = (r["px"] / pos["entry_px"] - 1) * 1e4
+            net = gross - 11.0
+            ledger.add(sid=sid, coin=c, source="testnet", kind="trade",
+                       signal_ts=pos["entry_ts"], ref_px=pos["entry_px"], limit_px=pos["entry_px"],
+                       fill_ts=pos["entry_ts"], fill_px=pos["entry_px"],
+                       exit_ts=time.time(), exit_px=r["px"],
+                       hold_min=(time.time() - pos["entry_ts"]) / 60.0,
+                       gross_bp=gross, fee_bp=9.0, net_bp=net, reason="ma_exit")
+            st["pos"].pop(c)
+            notes.append(f"{c} 市价平仓 @ {r['px']:.2f} → {net:+.1f}bp")
+    tr = [x for x in ledger.rows(sid, source="testnet") if x["kind"] == "trade"]
+    out = {"days": 0.0, "trades": len(tr), "mean_bp": 0.0, "equity": 10000.0, "orders": len(st["pos"])}
+    if tr:
+        nets = [float(x["net_bp"]) for x in tr]
+        first = st.setdefault("first_ts", time.time())
+        days = max((time.time() - first) / 86400.0, 0.01)
+        stats = {"days": round(days, 3), "trades": len(nets),
+                 "mean_bp": round(sum(nets) / len(nets), 2),
+                 "max_dd": round(min(0.0, min(nets) / 100.0), 4)}
+        pipeline.paper_tick(sid, stats, source="loop")
+        out.update(days=stats["days"], trades=stats["trades"], mean_bp=stats["mean_bp"])
+    _save(st, path)
+    if notes:
+        print(f"  [{stgy['name']}] " + " | ".join(notes))
+    return out
 
 
 def tick_testnet(stgy):
