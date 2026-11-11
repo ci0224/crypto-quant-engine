@@ -59,10 +59,12 @@ document.getElementById("btn").onclick = async () => {
   try {
     const acct = await connect();
     if (!acct) { btn.disabled = false; return; }
-    out("请在弹出的钱包窗口里点「签名」…");
+    const hexChain = await window.ethereum.request({ method: "eth_chainId" });
+    const chainId = parseInt(hexChain, 16);
+    out("当前网络 chainId = " + chainId + " · 请在弹出的钱包窗口里点「签名」…");
     const nonce = Date.now();
     const typed = {
-      domain: { name: "HyperliquidSignTransaction", version: "1", chainId: 421614,
+      domain: { name: "HyperliquidSignTransaction", version: "1", chainId: chainId,
                 verifyingContract: "0x0000000000000000000000000000000000000000" },
       types: {
         "HyperliquidTransaction:UsdClassTransfer": [
@@ -84,7 +86,7 @@ document.getElementById("btn").onclick = async () => {
     });
     out("已签名,提交到 Hyperliquid…");
     const action = { type: "usdClassTransfer", hyperliquidChain: "Testnet",
-                     signatureChainId: "0x66eee", amount: AMOUNT, toPerp: true, nonce };
+                     signatureChainId: hexChain, amount: AMOUNT, toPerp: true, nonce };
     const body = { action, nonce, signature: {
       r: "0x" + sig.slice(2, 66), s: "0x" + sig.slice(66, 130),
       v: parseInt(sig.slice(130, 132), 16) } };
