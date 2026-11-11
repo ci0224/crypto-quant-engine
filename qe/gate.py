@@ -70,12 +70,14 @@ def evaluate(metrics: dict, spec: dict) -> dict:
 
     # G7 极值依赖
     drop5 = m.get("drop_best5")
-    add("G7", "剔除最好 5 天后仍 > 0", drop5 is None or drop5 > 0, f"{drop5}")
+    add("G7", "剔除最好 5 天后仍 > 0", drop5 is not None and drop5 > 0,
+        "无数据(未计算)" if drop5 is None else f"{drop5:.2f}bp/笔")
 
     # G8 成本压测
     stress = m.get("cost_stress_mean")
     add("G8", f"{COST_STRESS:g}× 成本下仍 > 0",
-        stress is None or stress > 0, f"{stress}")
+        stress is not None and stress > 0,
+        "无数据(未计算)" if stress is None else f"{stress:.2f}bp/笔")
 
     # G9 清算安全
     if lev:
@@ -87,10 +89,14 @@ def evaluate(metrics: dict, spec: dict) -> dict:
     else:
         add("G9", "MAE < 强平距离", False, "无杠杆声明")
 
-    # G10 命中率(仅对逐笔策略要求)
+    # G10 命中率 或 盈亏比(趋势策略低命中高盈亏比是合法的)
     hit = m.get("hit_rate")
+    aw, al = m.get("avg_win_bp"), m.get("avg_loss_bp")
     if hit is not None:
-        add("G10", "命中率 ≥ 50%", hit >= 0.5, f"{hit*100:.1f}%")
+        rr = (aw / abs(al)) if (aw and al) else None
+        ok = hit >= 0.5 or (rr is not None and rr >= 2.0)
+        add("G10", "命中率 ≥ 50% 或 盈亏比 ≥ 2",
+            ok, f"命中 {hit*100:.1f}%" + (f", 盈亏比 {rr:.2f}" if rr else ""))
 
     passed = all(c.passed for c in checks)
     score = sum(c.passed for c in checks) / len(checks) if checks else 0.0
