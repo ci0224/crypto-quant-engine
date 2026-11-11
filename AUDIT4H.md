@@ -174,3 +174,58 @@ pipeline.reaudit(sid) → 用当前闸门重算;若在 paper/awaiting_approval/l
 
 1. **同样的规则,BTC 深挂被判"通过"而 maker_btc_boll20 被"退役"** —— 因为前者来自预注册的 9 组参数搜索(n_trials=9),后者来自我 18 组扫单(n_trials=18),阈值不同。这是多重检验的正确逻辑,但说明"发现路径"会影响判决。
 2. **6 条 halted 里,4 条是 Sharpe 1.19~1.57 的实打实候选**,只因 18 次试验下 DSR 没到 0.95。这不是"策略差",而是"证据还不够独立"。**它们应该继续留在样本外观察,而不是上实盘。**
+
+
+---
+
+## 十二、联网调研结论(4 份,均已核实)
+
+### ① Python 内部服务框架 → **不迁移,补 hardening**
+
+| 项 | 实测/结论 |
+|---|---|
+| ThreadingHTTPServer 对 HTTP/1.1 仍回 **HTTP/1.0**(无 keep-alive) | 已设 `protocol_version = "HTTP/1.1"` |
+| `StreamRequestHandler.timeout = None` → 半截请求头挂住线程 | 已设 `timeout = 15` |
+| **handler 抛异常 → 客户端收到 0 字节**(只 catch TimeoutError) | 已加 `_guard()` → 500 + 日志 |
+| `request_queue_size = 5` | 已改 128 + daemon 线程 |
+| 官方立场:"not recommended for production" | 单用户内部工具可接受;破千行/需 SSE/多用户才迁 **Starlette** |
+| 认证排序 | Caddy basic_auth(已用)> Tailscale > mTLS > OIDC(单用户纯负担) |
+
+2026-11 版本:FastAPI 0.162.4 / Starlette 1.10.0 / Litestar 2.25.0 / uvicorn 0.54.0 / Caddy 2.11.9。
+
+### ② SQLite → **不仅够用,而且发现我们 3 个真 bug**
+
+| 发现 | 状态 |
+|---|---|
+| `ledger.db` 是 `journal_mode=delete`(WAL 从未设过)→ 写阻塞读 | ✅ 已改 WAL + synchronous=NORMAL |
+| **双批准可复现**(alice/bob 同时批准 → 都成功 + 2 条事件) | ✅ 已用 `transition()` 条件更新修复 |
+| `update()` 与 `_ev()` 两个事务 → 状态变了没留痕 | ✅ approve 已合并;其余待迁 |
+| `BEGIN DEFERRED` 读后升级写锁会立刻 locked,**busy_timeout 无效** | 已记录:写入路径用条件 UPDATE(不先读) |
+
+容量实测:WAL+FULL 1,967 tx/s、WAL+NORMAL 42,763 tx/s;现网 84 事件/6,746 行 → **离迁移门槛差 3 个数量级**。
+不可篡改三层(触发器 + hash chain + 外部锚点):我们已有触发器 ✅,hash chain 待做。
+
+### ③ Hyperliquid 机器人 → **两个致命坑,已修**
+
+| 坑 | 后果 | 修复 |
+|---|---|---|
+| **SDK 用 `base_url == MAINNET_API_URL` 字符串相等判网络** | 多一个斜杠 → 按测试网签名 → "User or API Wallet does not exist",极难排查 | ✅ 加模块级断言 |
+| **孤儿单** | 进程 kill -9 后挂单留在交易所 | ✅ `scheduleCancel(now+120s)` 死手开关,每轮续期 |
+| 价格需满足 **5 位有效数字**(ETH 2456.78 非法) | 下单被拒 | ✅ `px_dec` 同时受 szDecimals 与有效数字约束 |
+| SDK `API.post()` 无超时、`get_timestamp_ms()` 无原子自增 | 挂死 / nonce 撞 | ✅ 全局 socket 超时 + 跨进程文件锁 |
+
+主网迁移 checklist(调研给出 9 条):新 agent key、Arbitrum USDC、**1 USDC 激活费**、运行时读 szDecimals、kill -9 演练、−100bp 成交率不可外推。
+
+### ④ 回测框架 → **不迁移,借 5 个模块**
+
+| 框架 | 最新版本 | 判断 |
+|---|---|---|
+| vectorbt (OSS) | 1.2.0 / 2026-10-19 | 活跃,bar/权重级,无逐笔 |
+| nautilus_trader | 1.231.0 / 2026-08-02;2.0.0rc9 | 最活跃,有 L2/L3;2.0 仍在 RC |
+| backtrader | 1.9.78.123 / 2023-04-19 | **事实停维,勿选** |
+| zipline-reloaded | 3.2.1 / 2026-10-25 | 复活,股票向无资金费 |
+| hftbacktest | 2.4.4 / 2025-12-10 | **唯一支持队列位置+延迟成交** ← 值得借鉴 |
+
+**结论:不迁移。** 瓶颈不在引擎而在统计与容量层;自建栈已有真实资金费、预注册 OOS、逐笔台账、100% 信号对账 —— 迁移要 2-3 人月且丢掉已验证基线。
+
+**建议补的 5 个模块**:`walkforward`(purge/embargo)、`capacity`(impact = k·σ·√(Q/ADV))、`portfolio`(风险预算+换手惩罚)、`dq_gate`(完整性门禁)、`pbo/dsr`(已有 DSR)。

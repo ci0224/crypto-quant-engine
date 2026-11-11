@@ -416,6 +416,7 @@ def tick_testnet(stgy):
     ex = _tn()
     st, path = _state(sid)
     st.setdefault("orders", {})
+    ex.arm_deadman(120)                    # 进程崩溃 → 交易所侧自动撤单(死手开关)
     if not st.get("_orphan_checked"):
         _orphans(stgy, st)                 # 启动首轮清理交易所上的孤儿单
         st["_orphan_checked"] = time.time()

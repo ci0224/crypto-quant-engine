@@ -17,6 +17,9 @@ from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
 
 TESTNET = "https://api.hyperliquid-testnet.xyz"
+# SDK 用 `base_url == MAINNET_API_URL` 判断网络(字符串相等);多一个斜杠就会被
+# 当成测试网签名 → 报 "User or API Wallet does not exist",极难排查。
+assert TESTNET == "https://api.hyperliquid-testnet.xyz"
 ENVF = pathlib.Path("/home/ubuntu/.hermes-secrets/hl_api_wallet.env")
 MASTER = "0x29ac98f5b4115dd7dd94abf8c46d6b3c1c519061"
 
@@ -70,6 +73,11 @@ def _retry(fn, *a, tries=3, **kw):
     raise last
 
 
+# SDK 用 `self.base_url == MAINNET_API_URL` 判断网络(字符串相等),
+# 写成 "https://api.hyperliquid.xyz/" 会被当测试网签名 → "User or API Wallet does not exist"
+
+
+
 class TestnetExec:
     def __init__(self) -> None:
         self.ex = Exchange(Account.from_key(_env()["HL_API_KEY"]), TESTNET,
@@ -91,15 +99,23 @@ class TestnetExec:
         s = sum(float(b["total"]) for b in (spot.get("balances") or []) if b["coin"] == "USDC")
         return float(st["marginSummary"]["accountValue"]) + s
 
-    def px_dec(self, coin: str) -> int:
-        """HL 价格精度规则:小数位 = 6 - szDecimals - 1(BTC 0 / ETH 1 / SOL 3)。"""
-        return max(0, 6 - self._dec.get(coin, 3) - 1)
+    def px_dec(self, coin: str, px: float = 0.0) -> int:
+        """HL 价格精度规则(两条同时满足):
+           ① 小数位 <= 6 - szDecimals - 1
+           ② 最多 5 位有效数字(调研实测:ETH 2456.78 非法,2456.8 合法)
+        """
+        import math
+        cap = max(0, 6 - self._dec.get(coin, 3) - 1)
+        if px <= 0:
+            return cap
+        sig = max(0, 5 - int(math.floor(math.log10(px))) - 1)
+        return min(cap, sig)
 
     def place_alo(self, coin: str, is_buy: bool, notional: float, offset_bp: float):
         mid = self.mid(coin)
         px = mid * (1 - offset_bp / 1e4) if is_buy else mid * (1 + offset_bp / 1e4)
         # BTC 的 tick size 是 1(整数价),其它保留 1-2 位
-        px = round(px, self.px_dec(coin))
+        px = round(px, self.px_dec(coin, px))
         dec = self._dec.get(coin, 3)
         sz = round(notional / px, dec)
         sz = max(sz, 10 ** (-dec))
@@ -120,7 +136,7 @@ class TestnetExec:
         return {"px": px, "sz": sz, "oid": oid, "raw": res}
 
     def place_tp(self, coin: str, sz: float, tp_px: float):
-        px = round(tp_px, self.px_dec(coin))
+        px = round(tp_px, self.px_dec(coin, tp_px))
         with _order_lock():
             res = self.ex.order(coin, False, round(sz, self._dec.get(coin, 3)), px,
                                 {"limit": {"tif": "Alo"}})
@@ -158,6 +174,19 @@ class TestnetExec:
 
     def fills(self) -> list:
         return self.info.user_fills(MASTER)
+
+    def arm_deadman(self, seconds: int = 120) -> None:
+        """续期"死手开关":seconds 内没有再次续期,交易所自动撤销该账户全部挂单。
+
+        调研结论:这是孤儿单的最佳解 —— 覆盖 kill -9 / 断网 / 宿主宕机,
+        比"启动时清理"更彻底(那种在你崩溃到重启之间仍有窗口)。
+        """
+        try:
+            self.info.user_state(MASTER)  # 触活
+            with _order_lock():
+                self.ex.schedule_cancel(int(time.time() * 1000) + seconds * 1000)
+        except Exception as e:
+            print(f"[testnet] 死手开关续期失败: {type(e).__name__}: {e}", file=sys.stderr)
 
     def position(self, coin: str) -> float:
         st = self.info.user_state(MASTER)

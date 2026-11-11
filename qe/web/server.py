@@ -158,6 +158,8 @@ def handle_api(method: str, path: str, query: dict, payload: dict | None, header
 
 class H(BaseHTTPRequestHandler):
     server_version = "qe"
+    # 默认 request_queue_size=5,突发请求会被内核丢弃
+    
     sys_version = ""
     protocol_version = "HTTP/1.1"   # keep-alive
     timeout = 15                    # 慢连接最多占 15 秒,防 slowloris / 线程耗尽
@@ -177,7 +179,27 @@ class H(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def _guard(self, fn):
+        """BaseHTTPRequestHandler 只 catch TimeoutError;其它异常会让客户端收到 0 字节。
+        必须自己兜住,否则监控看到的是 'Empty reply' 而不是 500。"""
+        try:
+            fn()
+        except Exception as e:
+            print(f"[qe-web] 5xx {self.command} {self.path}: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            try:
+                self._send(500, "application/json",
+                           json.dumps({"error": f"{type(e).__name__}: {e}"}).encode())
+            except Exception:
+                pass
+
     def do_GET(self):
+        self._guard(self._get)
+
+    def do_POST(self):
+        self._guard(self._post)
+
+    def _get(self):
         u = urlparse(self.path)
         ip = self.client_address[0]
         if u.path.startswith("/api/") and not _rate_ok(ip):
@@ -206,7 +228,7 @@ class H(BaseHTTPRequestHandler):
         ctype = "text/html; charset=utf-8" if fp.suffix == ".html" else "application/octet-stream"
         self._send(200, ctype, b"", head=True)
 
-    def do_POST(self):
+    def _post(self):
         u = urlparse(self.path)
         ip = self.client_address[0]
         if not _rate_ok(ip):
@@ -233,6 +255,8 @@ def main():
     # 默认 0.0.0.0:8091 —— 容器要经 docker 网关(172.17.0.1)访问,**不能只绑 loopback**。
     # 对外安全靠两层:云安全组不放行 8091 + Caddy 的 Basic Auth + 写操作 QE_TOKEN。
     host = os.environ.get("QE_HOST", "0.0.0.0")
+    ThreadingHTTPServer.request_queue_size = 128
+    ThreadingHTTPServer.daemon_threads = True
     srv = ThreadingHTTPServer((host, port), H)
     print(f"pipeline UI: http://{host}:{port}  (token {'on' if TOKEN else 'off'})")
     srv.serve_forever()

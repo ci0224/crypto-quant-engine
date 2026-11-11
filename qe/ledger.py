@@ -44,9 +44,15 @@ CREATE INDEX IF NOT EXISTS ix_ledger ON ledger (sid, source, kind, signal_ts);
 
 @contextmanager
 def conn():
+    """WAL 是持久属性:建库时没设就永远是 delete 模式(写入会阻塞读)。
+
+    调研实测本库之前是 journal_mode=delete,已改为 WAL + synchronous=NORMAL。
+    """
     os.makedirs(os.path.dirname(DB), exist_ok=True)
     c = sqlite3.connect(DB, timeout=10)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA synchronous=NORMAL")
     try:
         c.executescript(SCHEMA)
         yield c
