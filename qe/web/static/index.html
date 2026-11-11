@@ -168,7 +168,7 @@ function reconLine(s) {
 }
 
 function paperLine(s) {
-  const p = s.paper || null;
+  const p = (s.paper && Object.keys(s.paper).length) ? s.paper : null;
   if (!p) {
     if (s.state === 'awaiting_approval') return `<div class="pl bad">⚠️ 无真实纸交易记录 —— 该状态不是纸交易达标来的,请退回纸交易</div>`;
     if (s.state === 'paper') {

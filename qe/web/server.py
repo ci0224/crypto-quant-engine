@@ -62,7 +62,9 @@ def _strategies():
             "id": s["id"], "name": s["name"], "family": s["family"],
             "symbols": s["symbols"], "state": s["state"],
             "spec": s.get("spec"), "metrics": s.get("metrics") or {},
-            "audit": s.get("audit") or {}, "paper": s.get("paper_json") or {},
+            "audit": s.get("audit") or {},
+            # 注意:必须返回 None 而不是 {}(空对象在 JS 里是真值,会让前端误判"有数据但来源未知")
+            "paper": (s.get("paper_json") if s.get("paper_json") else None),
             "live_checks": gate.live_checks(s.get("metrics") or {}),
             "paper_source": (s.get("paper_json") or {}).get("source"),
             "approve_by": s.get("approve_by"),
