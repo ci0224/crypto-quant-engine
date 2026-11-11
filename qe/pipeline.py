@@ -124,8 +124,12 @@ def approve(sid, by: str, note=""):
             "拒绝上实盘 —— 近期有效性未通过:" + "; ".join(f"{c['id']} {c['detail']}" for c in bad)
             + "。请继续纸交易积累证据(≥20 笔)后再评。")
 
-    registry.update(sid, state="live", approve_by=by, approve_at=int(time.time()))
-    registry.event(sid, "approve", f"by={by} {note}")
+    m = s.get("metrics") or {}
+    evidence = (f"n={m.get('n_trades')} 均值={m.get('mean_bp')}bp CI低={m.get('ci_low')} "
+                f"纸交易={paper.get('days')}天/{paper.get('trades')}笔")
+    registry.transition(sid, "awaiting_approval", "live", "approve",
+                        f"by={by} {note} | 批准时证据: {evidence}",
+                        approve_by=by, approve_at=int(time.time()))
     return registry.get(sid)
 
 

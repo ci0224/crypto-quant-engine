@@ -49,7 +49,17 @@ CREATE TABLE IF NOT EXISTS events (
   kind TEXT NOT NULL,              -- register/backtest/review/promote/approve/halt/retire/paper_tick
   detail TEXT
 );
-CREATE INDEX IF NOT EXISTS ix_ev ON events(strategy_id, ts DESC);
+
+
+CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events 是 append-only 审计日志,禁止修改');
+END;
+
+CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events 是 append-only 审计日志,禁止删除');
+END;CREATE INDEX IF NOT EXISTS ix_ev ON events(strategy_id, ts DESC);
 """
 
 
@@ -121,7 +131,7 @@ def all():
 def events(sid, limit=50):
     with conn() as c:
         return [dict(r) for r in c.execute(
-            "SELECT * FROM events WHERE strategy_id=? ORDER BY ts DESC LIMIT ?", (sid, limit))]
+            "SELECT * FROM events WHERE strategy_id=? ORDER BY id DESC LIMIT ?", (sid, limit))]
 
 
 def _row(r):
@@ -136,3 +146,31 @@ def _row(r):
     # 前端统一读 s["paper"];库里列名是 paper_json
     d["paper"] = d.get("paper_json")
     return d
+
+
+def transition(sid, from_state, to_state, kind, detail="", **fields):
+    """原子状态转移:条件更新 + 事件写入在同一个事务里。
+
+    解决两个问题:
+      ① check-then-act 竞态(两个进程同时批准)
+      ② 状态改了但事件没写(崩溃窗口 → 审计断链)
+    """
+    return _transition(sid, from_state, to_state, kind, detail, fields)
+
+
+def _transition(sid, from_state, to_state, kind, detail, fields):
+    allowed = {"approve_by", "approve_at", "note", "metrics", "audit", "paper_json", "spec"}
+    with conn() as c:
+        sets, vals = ["state=?", "updated=?"], [to_state, int(time.time())]
+        for k, v in fields.items():
+            if k not in allowed:
+                raise KeyError(k)
+            sets.append(f"{k}=?")
+            vals.append(json.dumps(v) if k in {"metrics", "audit", "paper_json", "spec"} else v)
+        vals += [sid, from_state]
+        cur = c.execute(f"UPDATE strategies SET {', '.join(sets)} WHERE id=? AND state=?", vals)
+        if cur.rowcount != 1:
+            raise RuntimeError(f"状态转移失败:{sid} 不是 {from_state}(可能已被其他进程改动)")
+        _ev(c, sid, kind, detail)
+        c.commit()
+    return get(sid)

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
@@ -30,6 +31,9 @@ LOCK = threading.Lock()
 def _rate_ok(ip: str, limit: int = 120) -> bool:
     now = time.time()
     with LOCK:
+        # 防止 HITS 无界增长(长期运行的内存泄漏)
+        if len(HITS) > 4096:
+            HITS.clear()
         dq = HITS.setdefault(ip, [])
         while dq and now - dq[0] > 60:
             dq.pop(0)
@@ -95,8 +99,8 @@ def _reconcile():
                              "trades_loop": r["trades_loop"], "trades_bt": r["trades_bt"],
                              "paired": r["paired"], "mean_diff": r["mean_diff"],
                              "missing": r["missing"], "extra": r["extra"]}
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[qe-web] reconcile read failed: {type(e).__name__}: {e}", file=sys.stderr)
     return out
 
 def handle_api(method: str, path: str, query: dict, payload: dict | None, headers=None):
@@ -124,7 +128,7 @@ def handle_api(method: str, path: str, query: dict, payload: dict | None, header
         sid, action, by = p.get("sid", ""), p.get("action", ""), (p.get("by") or "").strip()
         # 令牌可放 body(token)或 header(X-QE-Token);header 更规范(不进请求体日志)
         given = p.get("token") or (headers or {}).get("X-QE-Token") or ""
-        if TOKEN and given != TOKEN:
+        if TOKEN and not hmac.compare_digest(str(given), str(TOKEN)):
             return _json({"error": "invalid token"}, 403)
         try:
             if action == "review":
@@ -133,10 +137,9 @@ def handle_api(method: str, path: str, query: dict, payload: dict | None, header
             if action == "promote_paper":
                 return _json({"ok": True, "state": pipeline.promote_paper(sid)["state"]})
             if action == "paper_tick":
-                # 演示用:用一个 tick 模拟纸交易进度(实盘由 paper loop 写)
-                st = p.get("stats") or {}
-                s = pipeline.paper_tick(sid, st)
-                return _json({"ok": True, "state": (s or {}).get("state")})
+                # 已移除:手工写入纸交易进度 = 伪造数据入口。
+                # 真实进度只能由 qe-paper 服务写(source=loop)。
+                return _json({"error": "paper_tick 已禁用:纸交易数据只能由 qe-paper 服务写入"}, 410)
             if action == "approve":
                 s = pipeline.approve(sid, by or "unknown", p.get("note", ""))
                 return _json({"ok": True, "state": s["state"], "approve_by": s["approve_by"]})
@@ -156,6 +159,8 @@ def handle_api(method: str, path: str, query: dict, payload: dict | None, header
 class H(BaseHTTPRequestHandler):
     server_version = "qe"
     sys_version = ""
+    protocol_version = "HTTP/1.1"   # keep-alive
+    timeout = 15                    # 慢连接最多占 15 秒,防 slowloris / 线程耗尽
 
     def _send(self, code, ctype, body, head=False):
         self.send_response(code)
@@ -191,7 +196,15 @@ class H(BaseHTTPRequestHandler):
         self._send(200, ctype, fp.read_bytes())
 
     def do_HEAD(self):
-        self.do_GET()
+        u = urlparse(self.path)
+        alias = {"/": "index.html", "": "index.html", "/transfer": "transfer.html"}
+        rel = alias.get(u.path, u.path.lstrip("/"))
+        fp = (STATIC / rel).resolve()
+        ok = ".." not in rel and str(fp).startswith(str(STATIC.resolve())) and fp.is_file()
+        if not ok:
+            return self._send(404, "text/plain", b"", head=True)
+        ctype = "text/html; charset=utf-8" if fp.suffix == ".html" else "application/octet-stream"
+        self._send(200, ctype, b"", head=True)
 
     def do_POST(self):
         u = urlparse(self.path)
@@ -199,6 +212,8 @@ class H(BaseHTTPRequestHandler):
         if not _rate_ok(ip):
             return self._send(429, "application/json", b'{"error":"slow down"}')
         n = int(self.headers.get("Content-Length") or 0)
+        if n > 65536:
+            return self._send(413, "application/json", b'{"error":"payload too large"}')
         try:
             payload = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
@@ -206,8 +221,11 @@ class H(BaseHTTPRequestHandler):
         code, ct, body = handle_api("POST", u.path, parse_qs(u.query), payload, self.headers)
         self._send(code, ct, body)
 
-    def log_message(self, *a):
-        pass
+    def log_message(self, fmt, *args):
+        # 只记录错误与写操作(Caddy 已有完整访问日志,这里补应用侧审计)
+        msg = fmt % args
+        if any(c in msg for c in (" 4", " 5")) or self.command == "POST":
+            print(f"[qe-web] {self.client_address[0]} {self.command} {self.path} :: {msg}", file=sys.stderr)
 
 
 def main():

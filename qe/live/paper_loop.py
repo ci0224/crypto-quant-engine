@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -34,13 +36,42 @@ def _state(sid):
     STATE.mkdir(parents=True, exist_ok=True)
     p = STATE / f"{sid}.json"
     if p.exists():
-        return json.loads(p.read_text()), p
+        try:
+            return json.loads(p.read_text()), p
+        except Exception as e:
+            # 崩溃时可能写坏:备份坏文件并重建,避免策略永久静默失败
+            bad = p.with_suffix(f".corrupt.{int(time.time())}")
+            p.replace(bad)
+            print(f"[paper] 状态文件损坏,已备份到 {bad.name}: {type(e).__name__}", file=sys.stderr)
     return {"eq": 10000.0, "peak": 10000.0, "trades": 0, "pnl_bp": [], "pos": {},
             "orders": {}, "day0": time.time()}, p
 
 
 def _save(st, p):
-    p.write_text(json.dumps(st, ensure_ascii=False))
+    # 原子写:先写临时文件再 rename,避免进程崩溃留下半截 JSON
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(st, ensure_ascii=False))
+    os.replace(tmp, p)
+
+
+def _orphans(stgy, st):
+    """启动/每轮对账:交易所上存在但本地状态没有的挂单 → 撤掉。
+
+    典型场景:进程在"已下单、未保存状态"之间崩溃,交易所留着孤儿单。
+    """
+    try:
+        from .testnet_exec import TestnetExec
+        ex = _tn()
+        known = {o.get("oid") for o in (st.get("orders") or {}).values() if o.get("oid")}
+        n = 0
+        for o in ex.open_orders():
+            if int(o["oid"]) not in {int(k) for k in known if k}:
+                ex.cancel(o["coin"], o["oid"])
+                n += 1
+        if n:
+            print(f"[paper] {stgy['name']}: 清理 {n} 个孤儿挂单", file=sys.stderr)
+    except Exception as e:
+        print(f"[paper] 孤儿单对账失败: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 def _candles(coin, interval="1d", n=400):
@@ -348,6 +379,10 @@ def tick_testnet(stgy):
     ex = _tn()
     st, path = _state(sid)
     st.setdefault("orders", {})
+    if not st.get("_orphan_checked"):
+        _orphans(stgy, st)                 # 启动首轮清理交易所上的孤儿单
+        st["_orphan_checked"] = time.time()
+        _save(st, path)
     spec = stgy["spec"] or {}
     notional = float(spec.get("notional_usd") or 20.0)
     now = time.time()
@@ -450,7 +485,12 @@ def main():
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--interval", type=int, default=300)
     a = ap.parse_args()
+    # HL SDK 的 requests 没有超时参数 —— 设全局 socket 超时,避免单次请求挂死整个循环
+    import socket
+    socket.setdefaulttimeout(15)
+    hb = STATE / "heartbeat"
     while True:
+        t0 = time.time()
         rows = [s for s in registry.all() if s["state"] == "paper"]
         for s in rows:
             try:
@@ -460,9 +500,16 @@ def main():
                           f"mean={st['mean_bp']}bp eq={st['equity']}")
             except Exception as e:
                 print(f"[paper] {s['name']} 失败: {type(e).__name__}: {e}")
+        # 心跳:文件时间戳可被外部监控(service active 不等于循环健康)
+        try:
+            STATE.mkdir(parents=True, exist_ok=True)
+            hb.write_text(f"{int(time.time())} {len(rows)}\n")
+        except Exception:
+            pass
         if a.once:
             break
-        time.sleep(a.interval)
+        # 漂移校正:上一轮耗时不该累加到周期里
+        time.sleep(max(5, a.interval - (time.time() - t0)))
 
 
 if __name__ == "__main__":
