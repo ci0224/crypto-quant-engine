@@ -119,6 +119,16 @@ def live_checks(metrics: dict) -> list[dict]:
     def add(cid, label, passed, detail):
         out.append({"id": cid, "label": label, "passed": bool(passed), "detail": str(detail)})
 
+    # ---- 引擎级闸门:必须看复利后的净值,不能只看逐笔算术均值 ----
+    cagr = m.get("cagr")
+    dd = m.get("max_dd")
+    shp = m.get("sharpe")
+    add("G12", "复利后 CAGR > 0", cagr is not None and cagr > 0,
+        "缺数据" if cagr is None else f"CAGR {cagr:.1f}%")
+    add("G13", "最大回撤 > -60%", dd is not None and dd > -60,
+        "缺数据" if dd is None else f"DD {dd:.1f}%")
+    add("G14", "引擎 Sharpe ≥ 1.0", shp is not None and shp >= 1.0,
+        "缺数据" if shp is None else f"Sharpe {shp:.2f}")
     add("G11", f"近 12 个月 CI 下界 > 0(样本 ≥{RECENT_MIN_N} 笔)",
         n is not None and n >= RECENT_MIN_N and ci is not None and ci > 0,
         ("无近期窗口数据(未跑 windows.py)" if n is None else f"n={n} 均值={mean}bp CI低={ci}bp"))
