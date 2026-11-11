@@ -26,7 +26,9 @@ def _env() -> dict:
 
 
 
-_LCK = pathlib.Path("/tmp/qe_hl_order.lock")
+# 注意:必须放在应用目录,不能放 /tmp —— systemd 的 PrivateTmp=yes 会让每个服务
+# 拥有独立的 /tmp,锁就失效了(服务与手工脚本会撞 nonce)
+_LCK = pathlib.Path(__file__).resolve().parent.parent.parent / "data" / ".hl_order.lock"
 
 
 @contextmanager
