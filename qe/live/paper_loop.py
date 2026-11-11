@@ -367,6 +367,43 @@ def tick_testnet_breakout(stgy):
     return out
 
 
+def _reconcile_positions(stgy, st):
+    """持仓对账:交易所持仓必须与本地状态一致,否则接管或平掉。
+
+    不一致的场景:手工测试留下的仓位、进程崩溃后状态丢失、elsewhere 平仓。
+    """
+    try:
+        ex = _tn()
+        for c in stgy["symbols"]:
+            qty = float(ex.position(c) or 0.0)
+            od = (st.get("orders") or {}).get(c) or {}
+            if abs(qty) > 0 and not od.get("filled"):
+                # 交易所有多单但我们不知道 → 接管(按当前 mid 记为入场,交给正常出场逻辑)
+                mp = ex.mid(c)
+                st.setdefault("orders", {})[c] = {
+                    "oid": None, "coin": c, "ref": mp, "limit": mp, "tp_px": mp * 1.012,
+                    "sz": abs(qty), "sig_ts": time.time(), "placed_ts": time.time(),
+                    "filled": True, "fill_px": mp, "fill_ts": time.time(), "_adopted": True}
+                print(f"[paper] {stgy['name']} {c} 发现未记账持仓 {qty},已接管(按 mid {mp} 记入场)",
+                      file=sys.stderr)
+            elif abs(qty) < 1e-9 and od.get("filled"):
+                # 本地以为有仓,交易所已空(被手工平掉/爆仓)→ 记账并清状态
+                mp = ex.mid(c)
+                gross = (mp / od["fill_px"] - 1) * 1e4
+                ledger.add(sid=stgy["id"], coin=c, source="testnet", kind="trade",
+                           signal_ts=od.get("sig_ts"), ref_px=od.get("ref"),
+                           limit_px=od.get("limit"), fill_ts=od.get("fill_ts"),
+                           fill_px=od["fill_px"], exit_ts=time.time(), exit_px=mp,
+                           hold_min=(time.time() - od["fill_ts"]) / 60,
+                           gross_bp=gross, fee_bp=3.0, net_bp=gross - 3.0,
+                           reason="external_close")
+                st["orders"].pop(c, None)
+                print(f"[paper] {stgy['name']} {c} 持仓已在别处平掉,按 mid {mp} 记账",
+                      file=sys.stderr)
+    except Exception as e:
+        print(f"[paper] 持仓对账失败: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def tick_testnet(stgy):
     """venue=testnet:真实挂单。由 pipeline 状态驱动,不用 cron。
 
@@ -383,6 +420,7 @@ def tick_testnet(stgy):
         _orphans(stgy, st)                 # 启动首轮清理交易所上的孤儿单
         st["_orphan_checked"] = time.time()
         _save(st, path)
+    _reconcile_positions(stgy, st)
     spec = stgy["spec"] or {}
     notional = float(spec.get("notional_usd") or 20.0)
     now = time.time()

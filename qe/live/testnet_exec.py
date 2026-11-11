@@ -28,6 +28,17 @@ def _env() -> dict:
 
 # 注意:必须放在应用目录,不能放 /tmp —— systemd 的 PrivateTmp=yes 会让每个服务
 # 拥有独立的 /tmp,锁就失效了(服务与手工脚本会撞 nonce)
+def cloid_for(key: str):
+    """确定性 client order id:同一信号重试时交易所会拒绝重复 cloid,而不是再下一单。
+
+    SDK 要求 Cloid 对象,不能直接传 hex 字符串。
+    """
+    import hashlib
+
+    from hyperliquid.utils.types import Cloid
+    return Cloid.from_str("0x" + hashlib.blake2b(key.encode(), digest_size=16).hexdigest())
+
+
 _LCK = pathlib.Path(__file__).resolve().parent.parent.parent / "data" / ".hl_order.lock"
 
 
@@ -45,6 +56,18 @@ def _order_lock():
             yield
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _retry(fn, *a, tries=3, **kw):
+    """网络/5xx 重试;业务拒绝(返回 err)不重试,交给调用方判断。"""
+    last = None
+    for i in range(tries):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:
+            last = e
+            time.sleep(0.4 * (2 ** i))
+    raise last
 
 
 class TestnetExec:
@@ -80,8 +103,15 @@ class TestnetExec:
         dec = self._dec.get(coin, 3)
         sz = round(notional / px, dec)
         sz = max(sz, 10 ** (-dec))
+        cl = cloid_for(f"{coin}|{px}|{sz}|{int(time.time() // 300)}")
+        # 实测:HL 不拒绝重复 cloid(两笔都会挂上)→ 必须客户端前置去重
+        raw = cl.to_raw()
+        for o in self.open_orders():
+            if str(o.get("cloid") or "").lower() == raw.lower():
+                return {"px": px, "sz": sz, "oid": o["oid"], "raw": {"dedup": True}}
         with _order_lock():
-            res = self.ex.order(coin, is_buy, sz, px, {"limit": {"tif": "Alo"}})
+            res = _retry(lambda: self.ex.order(coin, is_buy, sz, px,
+                                               {"limit": {"tif": "Alo"}}, cloid=cl))
         oid = None
         try:
             oid = res["response"]["data"]["statuses"][0]["resting"]["oid"]
