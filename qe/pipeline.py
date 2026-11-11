@@ -64,17 +64,28 @@ def promote_paper(sid, note=""):
     return registry.get(sid)
 
 
-def paper_tick(sid, stats: dict):
-    """纸交易心跳:写入统计;达标则转 awaiting_approval(仍需人工批准)。"""
+def paper_tick(sid, stats: dict, source: str = "api"):
+    """纸交易心跳:写入统计;达标则转 awaiting_approval(仍需人工批准)。
+
+    source 记录数据来源:
+      · "loop" —— 真实纸交易循环写入(唯一可用于审批的来源)
+      · 其它   —— 手工/调试写入,永久标记为不可审批(防止"编数据上进实盘")
+    """
     s = registry.get(sid)
     if not s or s["state"] != "paper":
         return None
     m = s.get("metrics") or {}
+    stats = dict(stats or {})
+    stats["source"] = source
     registry.update(sid, paper_json=stats)
     ok = (stats.get("days", 0) >= PAPER_MIN_DAYS
           and stats.get("trades", 0) >= PAPER_MIN_TRADES
           and (stats.get("mean_bp") or 0) > 0
           and abs(min(stats.get("max_dd", 0), 0)) <= abs(m.get("max_dd") or 1) * PAPER_MAX_DD_MULT)
+    if ok and source != "loop":
+        registry.event(sid, "paper_blocked",
+                       f"手工写入达标但不推进状态(source={source});仅 loop 写入可用于审批")
+        return registry.get(sid)
     if ok:
         registry.update(sid, state="awaiting_approval")
         registry.event(sid, "paper_pass",
@@ -89,6 +100,11 @@ def approve(sid, by: str, note=""):
     s = registry.get(sid)
     if not s:
         raise KeyError(sid)
+    paper = s.get("paper") or {}
+    if paper.get("source") != "loop":
+        raise IllegalTransition(
+            f"拒绝审批:纸交易数据来源 = {paper.get('source')!r},不是真实纸交易循环写入的"
+            "(手工/演示数据不可用于推进实盘)")
     if s["state"] != "awaiting_approval":
         raise IllegalTransition(f"只有 awaiting_approval 可批准(当前 {s['state']})")
     if not by:

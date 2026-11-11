@@ -149,7 +149,7 @@ def tick(stgy):
     stats = {"days": round(days, 2), "trades": st["trades"],
              "mean_bp": round(float(np.mean(st["pnl_bp"])), 2) if st["pnl_bp"] else 0.0,
              "equity": round(st["eq"], 2), "max_dd": round(dd, 4)}
-    pipeline.paper_tick(sid, stats)
+    pipeline.paper_tick(sid, stats, source="loop")
     return stats
 
 

@@ -159,8 +159,12 @@ function paperLine(s) {
     if (s.state === 'paper') return `<div class="pl">纸交易:未开始(等首个信号)</div>`;
     return '';
   }
+  const src = p.source || 'unknown';
+  if (src !== 'loop') {
+    return `<div class="pl bad">⚠️ 纸交易数据来源=${esc(src)}(非真实循环,不可用于审批)</div>`;
+  }
   const ok = (p.days ?? 0) >= 14 && (p.trades ?? 0) >= 20;
-  return `<div class="pl ${ok ? '' : 'bad'}">纸交易:${p.days ?? 0} 天 / ${p.trades ?? 0} 笔 / ${fmt(p.mean_bp)}bp${p.demo ? ' · 演示数据' : ''}</div>`;
+  return `<div class="pl ${ok ? '' : 'bad'}">纸交易:${p.days ?? 0} 天 / ${p.trades ?? 0} 笔 / ${fmt(p.mean_bp)}bp · 循环写入</div>`;
 }
 
 function card(s) {
@@ -183,7 +187,6 @@ function card(s) {
     <div class="btns" onclick="event.stopPropagation()">
       ${s.state === 'backtested' || s.state === 'rejected' ? `<button onclick="act('${s.id}','review')">跑审计</button>` : ''}
       ${s.state === 'reviewed' ? `<button class="primary" onclick="act('${s.id}','promote_paper')">进入纸交易</button>` : ''}
-      ${s.state === 'paper' ? `<button onclick="simTick('${s.id}')">模拟一次心跳</button>` : ''}
       ${s.state === 'awaiting_approval' ? `<button class="primary" onclick="approve('${s.id}','${esc(s.name)}')">批准上实盘</button>` : ''}
       ${['paper','awaiting_approval','halted'].includes(s.state) ? `<button class="warn" onclick="act('${s.id}','reset_paper')">退回纸交易</button>` : ''}
       ${s.state === 'live' ? `<button class="warn" onclick="act('${s.id}','halt')">暂停</button>` : ''}
@@ -203,12 +206,6 @@ async function act(sid, action, extra = {}) {
   return r;
 }
 
-function simTick(sid) {
-  const days = Number(prompt('模拟纸交易:已运行天数?', '15') || 0);
-  const trades = Number(prompt('纸交易笔数?', '24') || 0);
-  const mean = Number(prompt('每笔均值(bp)?', '18') || 0);
-  act(sid, 'paper_tick', {stats: {days, trades, mean_bp: mean, max_dd: -0.08}});
-}
 
 async function approve(sid, name) {
   const by = prompt('批准人(必填,会记录在案):', localStorage.getItem('qe_by') || '');

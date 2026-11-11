@@ -133,4 +133,6 @@ def _row(r):
             except Exception:
                 pass
     d["symbols"] = json.loads(d["symbols"]) if d.get("symbols") else []
+    # 前端统一读 s["paper"];库里列名是 paper_json
+    d["paper"] = d.get("paper_json")
     return d
