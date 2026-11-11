@@ -182,6 +182,7 @@ function card(s) {
       <div><span>命中</span><b>${m.hit_rate ? (m.hit_rate*100).toFixed(1)+'%' : '—'}</b></div>
     </div>
     ${paperLine(s)}
+    ${(s.live_checks || []).map(c => `<div class="pl ${c.passed ? '' : 'bad'}">${c.passed ? '✅' : '🚫'} G11 实盘门禁:${esc(c.label)} → ${esc(c.detail)}</div>`).join('')}
     ${checks.length ? `<div class="checks">${checks.map(c =>
         `<span class="chk ${c.passed ? '' : 'bad'}" title="${esc(c.detail)}">${esc(c.id)}${c.passed ? '✓' : '✗'}</span>`).join('')}</div>` : ''}
     <div class="btns" onclick="event.stopPropagation()">

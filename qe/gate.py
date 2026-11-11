@@ -97,3 +97,23 @@ def evaluate(metrics: dict, spec: dict) -> dict:
     blockers = [c.label for c in checks if not c.passed]
     return {"passed": passed, "score": round(score, 3),
             "checks": [c.to_dict() for c in checks], "blockers": blockers}
+
+# ---------------- 实盘门禁(L 层):只在"批准上实盘"时检查 ----------------
+RECENT_MIN_N = 20          # 近 12 个月至少要 20 笔才算有证据
+RECENT_NOTE = "近 12 个月均值 95% CI 下界必须 > 0 —— 证明 edge 在今天还活着,而不只是三年前"
+
+
+def live_checks(metrics: dict) -> list[dict]:
+    """实盘前置门禁。回测不过可以继续纸交易攒证据;这一层不过不许动真钱。"""
+    out: list[dict] = []
+    n = metrics.get("recent_n")
+    mean = metrics.get("recent_mean_bp")
+    ci = metrics.get("recent_ci_low")
+
+    def add(cid, label, passed, detail):
+        out.append({"id": cid, "label": label, "passed": bool(passed), "detail": str(detail)})
+
+    add("G11", f"近 12 个月 CI 下界 > 0(样本 ≥{RECENT_MIN_N} 笔)",
+        n is not None and n >= RECENT_MIN_N and ci is not None and ci > 0,
+        ("无近期窗口数据(未跑 windows.py)" if n is None else f"n={n} 均值={mean}bp CI低={ci}bp"))
+    return out

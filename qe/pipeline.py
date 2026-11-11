@@ -109,6 +109,14 @@ def approve(sid, by: str, note=""):
         raise IllegalTransition(f"只有 awaiting_approval 可批准(当前 {s['state']})")
     if not by:
         raise ValueError("approve_by 不能为空:必须记录谁批准的")
+    # 实盘门禁(L 层):近期有效性必须成立,否则只许继续纸交易
+    lc = gate.live_checks(s.get("metrics") or {})
+    bad = [c for c in lc if not c["passed"]]
+    if bad:
+        raise IllegalTransition(
+            "拒绝上实盘 —— 近期有效性未通过:" + "; ".join(f"{c['id']} {c['detail']}" for c in bad)
+            + "。请继续纸交易积累证据(≥20 笔)后再评。")
+
     registry.update(sid, state="live", approve_by=by, approve_at=int(time.time()))
     registry.event(sid, "approve", f"by={by} {note}")
     return registry.get(sid)

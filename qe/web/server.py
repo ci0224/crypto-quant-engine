@@ -52,6 +52,8 @@ def _strategies():
             "symbols": s["symbols"], "state": s["state"],
             "spec": s.get("spec"), "metrics": s.get("metrics") or {},
             "audit": s.get("audit") or {}, "paper": s.get("paper_json") or {},
+            "live_checks": gate.live_checks(s.get("metrics") or {}),
+            "paper_source": (s.get("paper_json") or {}).get("source"),
             "approve_by": s.get("approve_by"),
             "approve_at": s.get("approve_at"), "note": s.get("note"),
             "updated": s.get("updated"),
@@ -74,7 +76,8 @@ def handle_api(method: str, path: str, query: dict, payload: dict | None, header
         if not s:
             return _json({"error": "not found"}, 404)
         return _json({"item": s, "events": registry.events(sid, 40),
-                      "checks": (s.get("audit") or {}).get("checks", [])})
+                      "checks": (s.get("audit") or {}).get("checks", []),
+                      "live_checks": gate.live_checks(s.get("metrics") or {})})
 
     if method == "POST" and path == "/api/action":
         p = payload or {}
