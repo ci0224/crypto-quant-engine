@@ -157,3 +157,27 @@ def reset_paper(sid: str, note: str = ""):
     registry.update(sid, state="paper", paper_json=None)
     registry.event(sid, "reset_paper", note or "退回纸交易,清空历史进度")
     return registry.get(sid)
+
+
+def reaudit(sid: str, by: str = "audit4h") -> dict:
+    """用当前闸门重新审判一条策略(可作用于 paper/awaiting_approval/live)。
+
+    闸门升级后,已经在跑的策略必须重新过审;不通过则自动 halted,
+    不能因为"当初过了"就一直跑下去。
+    """
+    s = registry.get(sid)
+    if not s:
+        raise KeyError(sid)
+    res = gate.evaluate(s.get("metrics") or {}, s.get("spec") or {})
+    fails = [c for c in res["checks"] if not c["passed"]]
+    registry.event(sid, "reaudit",
+                   f"by={by} score={res['score']:.2f} 未通过={[c['id'] for c in fails]}")
+    registry.update(sid, audit=res)
+    state = s["state"]
+    if fails and state in ("paper", "awaiting_approval", "live"):
+        registry.transition(sid, state, "halted", "halt",
+                            f"重新审计未通过({','.join(c['id'] for c in fails)}),自动停用")
+        return {"ok": False, "score": res["score"], "fails": [c["id"] for c in fails],
+                "state": "halted"}
+    return {"ok": res["passed"], "score": res["score"],
+            "fails": [c["id"] for c in fails], "state": state}

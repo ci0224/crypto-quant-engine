@@ -142,3 +142,35 @@ $20 市价往返 ETH testnet:  -8.7bp   (回测假设 11bp → 假设偏保守)
 下单被拒原因分布:          价格 tick(SOL/ETH 全中)、最小名义 $10
 BTC 挂单最小名义:          $12 即可(0.0002 × 73k)
 ```
+
+
+---
+
+## 十一、闸门升级:G15/G16 + 重新审计(reaudit)
+
+### 新增两条闸门(来自文献:Harvey-Liu-Zhu 2016 / Bailey & López de Prado 2014)
+
+| 闸门 | 内容 | 实现要点 |
+|---|---|---|
+| **G15** | t 阈值按**试验次数** Bonferroni 调整 | `t_gate = Φ⁻¹(1 − 0.05/(2N))`;N=1→2.00,N=18→2.99,N=45→3.26 |
+| **G16** | **Deflated Sharpe Ratio > 0.95** | Bailey-LdP 公式;**注意必须把年化 Sharpe 换算成日频**(我第一版量纲错了,DSR 全 1.000,已修) |
+
+### 关键实现:reaudit(闸门升级后必须重判在跑的策略)
+
+```
+pipeline.reaudit(sid) → 用当前闸门重算;若在 paper/awaiting_approval/live 且不通过 → 自动 halted
+```
+
+### 重判结果(这才是最诚实的部分)
+
+| 状态 | 策略 | 说明 |
+|---|---|---|
+| **paper(4)** | deep_limit_btc / deep_limit_sol / maker_sol_keltner / maker_sol_rsi1430 | DSR 通过 |
+| **halted(6)** | maker_btc_rsi1430 / maker_btc_keltner / maker_sol_vwap-2sd / maker_sol_boll40x25 / atr_breakout / boll_breakout_eth | **全部只差 G16**(DSR 0.48~0.94) |
+| rejected(6) | ETH 深挂、趋势、资金费×2、SOL 布林突破 | 更早失败 |
+| retired(2) | 与 deep_limit 重复的两条 | — |
+
+**两个必须说清的点**:
+
+1. **同样的规则,BTC 深挂被判"通过"而 maker_btc_boll20 被"退役"** —— 因为前者来自预注册的 9 组参数搜索(n_trials=9),后者来自我 18 组扫单(n_trials=18),阈值不同。这是多重检验的正确逻辑,但说明"发现路径"会影响判决。
+2. **6 条 halted 里,4 条是 Sharpe 1.19~1.57 的实打实候选**,只因 18 次试验下 DSR 没到 0.95。这不是"策略差",而是"证据还不够独立"。**它们应该继续留在样本外观察,而不是上实盘。**

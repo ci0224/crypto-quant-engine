@@ -98,6 +98,18 @@ def evaluate(metrics: dict, spec: dict) -> dict:
         add("G10", "命中率 ≥ 50% 或 盈亏比 ≥ 2",
             ok, f"命中 {hit*100:.1f}%" + (f", 盈亏比 {rr:.2f}" if rr else ""))
 
+    # ---- 多重检验:试验次数越多,阈值越高;并按 DSR 通缩 ----
+    n_trials = int(m.get("n_trials") or 1)
+    t_gate = 2.0 if n_trials <= 1 else max(2.0, _norm_ppf(1 - 0.05 / (2 * n_trials)))
+    t_val = m.get("t_stat")
+    add("G15", f"t >= {t_gate:.2f} ({n_trials} trials, Bonferroni)",
+        t_val is not None and float(t_val) >= t_gate, f"t={t_val} thr={t_gate:.2f}")
+    # 注意:DSR 公式要求"逐期"(日频)Sharpe,而 metrics.sharpe 是年化的 → 必须换算
+    sr_pp = float(m.get("sharpe") or 0.0) / (365 ** 0.5)
+    dsr = deflated_sharpe(sr_pp, int(m.get("n_obs") or 1500),
+                          n_trials, float(m.get("skew") or 0.0), float(m.get("kurt") or 3.0))
+    add("G16", "Deflated Sharpe > 0.95", dsr > 0.95, f"DSR={dsr:.3f} (trials={n_trials})")
+
     passed = all(c.passed for c in checks)
     score = sum(c.passed for c in checks) / len(checks) if checks else 0.0
     blockers = [c.label for c in checks if not c.passed]
@@ -118,6 +130,52 @@ def evaluate(metrics: dict, spec: dict) -> dict:
 RECENT_MIN_N = 20          # 近 12 个月至少要 20 笔才算有证据
 RECENT_NOTE = "近 12 个月均值 95% CI 下界必须 > 0 —— 证明 edge 在今天还活着,而不只是三年前"
 
+
+
+# ---------------- 多重检验:G15 试验次数调整 / G16 Deflated Sharpe ----------------
+def _norm_ppf(p):
+    import math
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00]
+    if p <= 0:
+        return -1e9
+    if p < 0.02425:
+        q = (-2 * math.log(p)) ** 0.5
+        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    if p > 1 - 0.02425:
+        q = (-2 * math.log(1 - p)) ** 0.5
+        return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    q = p - 0.5
+    r = q * q
+    return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
+
+
+def _norm_cdf(x):
+    import math
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def deflated_sharpe(sharpe, n_obs, n_trials, skew=0.0, kurt=3.0):
+    """Bailey & López de Prado (2014):按试验次数通缩后的 Sharpe 显著概率。"""
+    import math
+    if not sharpe or n_obs < 30 or n_trials < 1:
+        return 0.0
+    g = 0.5772156649
+    e = math.e
+    if n_trials == 1:
+        sr0 = 0.0
+    else:
+        sr0 = (math.sqrt(1.0 / max(n_obs - 1, 1)) *
+               ((1 - g) * _norm_ppf(1 - 1.0 / n_trials) +
+                g * _norm_ppf(1 - 1.0 / (n_trials * e))))
+    denom = math.sqrt(max(1e-12, 1 - skew * sharpe + (kurt - 1) / 4.0 * sharpe ** 2))
+    return _norm_cdf((sharpe - sr0) * math.sqrt(max(n_obs - 1, 1)) / denom)
 
 def live_checks(metrics: dict) -> list[dict]:
     """实盘前置门禁。回测不过可以继续纸交易攒证据;这一层不过不许动真钱。"""
