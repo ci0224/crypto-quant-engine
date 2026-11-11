@@ -59,7 +59,7 @@ def _strategies():
     return out
 
 
-def handle_api(method: str, path: str, query: dict, payload: dict | None):
+def handle_api(method: str, path: str, query: dict, payload: dict | None, headers=None):
     if method == "GET" and path == "/api/strategies":
         return _json({"items": _strategies(),
                       "policies": {"paper_min_days": pipeline.PAPER_MIN_DAYS,
@@ -79,7 +79,9 @@ def handle_api(method: str, path: str, query: dict, payload: dict | None):
     if method == "POST" and path == "/api/action":
         p = payload or {}
         sid, action, by = p.get("sid", ""), p.get("action", ""), (p.get("by") or "").strip()
-        if TOKEN and p.get("token") != TOKEN:
+        # 令牌可放 body(token)或 header(X-QE-Token);header 更规范(不进请求体日志)
+        given = p.get("token") or (headers or {}).get("X-QE-Token") or ""
+        if TOKEN and given != TOKEN:
             return _json({"error": "invalid token"}, 403)
         try:
             if action == "review":
@@ -155,7 +157,7 @@ class H(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             payload = {}
-        code, ct, body = handle_api("POST", u.path, parse_qs(u.query), payload)
+        code, ct, body = handle_api("POST", u.path, parse_qs(u.query), payload, self.headers)
         self._send(code, ct, body)
 
     def log_message(self, *a):
@@ -164,8 +166,11 @@ class H(BaseHTTPRequestHandler):
 
 def main():
     port = int(os.environ.get("QE_PORT", "8091"))
-    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
-    print(f"pipeline UI: http://127.0.0.1:{port}  (token {'on' if TOKEN else 'off'})")
+    # 默认 0.0.0.0:8091 —— 容器要经 docker 网关(172.17.0.1)访问,**不能只绑 loopback**。
+    # 对外安全靠两层:云安全组不放行 8091 + Caddy 的 Basic Auth + 写操作 QE_TOKEN。
+    host = os.environ.get("QE_HOST", "0.0.0.0")
+    srv = ThreadingHTTPServer((host, port), H)
+    print(f"pipeline UI: http://{host}:{port}  (token {'on' if TOKEN else 'off'})")
     srv.serve_forever()
 
 
