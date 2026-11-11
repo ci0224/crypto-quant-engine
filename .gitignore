@@ -8,3 +8,5 @@ data/*.log
 .env
 *.pem
 secrets*
+data/pipeline.db*
+data/paper/

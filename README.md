@@ -8,6 +8,32 @@ Hyperliquid 永续合约的**量化交易引擎**:数据 → 回测 → 参数�
 - 支持 4 个策略:横截面动量 / 短期反转 / 资金费套利 / 趋势跟踪
 - 纸交易与实盘共用同一套目标权重逻辑
 
+## 策略流水线(可视化)
+
+`qe-web`(http://127.0.0.1:8091,仅本机)+ `qe-paper`(每 5 分钟)两个 systemd 服务。
+
+```
+① 研究/回测   策略登记 + 回测指标入 registry
+② 审计闸门    qe/gate.py 把 research/09 的检查变成可执行判定(G1..G10)
+③ 纸交易      qe/live/paper_loop.py 用实时行情跑模拟盘,写统计
+④ 待人工批准  纸交易达标(≥14 天 / ≥20 笔 / 均值>0 / 回撤受控)自动进入
+⑤ 实盘        必须人工在 UI 输入策略名 + 批准人 + 令牌,才转 live
+```
+
+**闸门阈值**(`qe/gate.py`,改这里 = 改政策):`t ≥ 2.0` · `bootstrap CI 下界 > 0` ·
+`MAE < 强平距离 × 0.9` · `2× 成本压测仍 > 0` · `剔除最好 5 天仍 > 0` · `样本 ≥100 笔或≥730 天` ·
+`声明完整(杠杆/持仓/成本,前置)`。
+
+**API**:`GET /api/strategies` · `GET /api/strategy/<id>` · `POST /api/action`
+(`review` / `promote_paper` / `paper_tick` / `approve` / `halt` / `retire`)。
+
+**安全**:默认只听 127.0.0.1;要外网访问请用 Caddy 反代 + Basic Auth,并设 `QE_TOKEN`
+(`approve` 等写操作会校验)。实盘下单还需要 `HL_ACCOUNT_ADDRESS` + `HL_PRIVATE_KEY`。
+
+**状态机**:`draft → backtested → reviewed → paper → awaiting_approval → live`,
+外加 `rejected / halted / retired`;每次转移都写 `events` 时间线。
+
+
 ## 快速开始
 
 ```bash

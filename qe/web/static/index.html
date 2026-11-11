@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>策略流水线 · crypto-quant-engine</title>
+<style>
+:root{
+  --bg:#0a0e14; --surface:#111722; --surface2:#161e2b; --line:#1e2836; --line2:#2a3648;
+  --txt:#e9eef6; --txt2:#9fb0c3; --txt3:#6b7c91;
+  --green:#2ee08a; --red:#ff5c7a; --amber:#f5b942; --blue:#4d9dff; --cyan:#22d3ee; --violet:#a78bfa;
+  --r:12px; --r-lg:16px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--txt);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif;
+  font-variant-numeric:tabular-nums}
+.wrap{max-width:1560px;margin:0 auto;padding:18px 18px 60px}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+h1{font-size:19px;margin:0;letter-spacing:.2px}
+.sub{color:var(--txt3);font-size:12.5px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:11px;border:1px solid var(--line2);color:var(--txt2);background:var(--surface2)}
+.dot{width:6px;height:6px;border-radius:50%}
+
+/* 看板 */
+.board{display:grid;grid-template-columns:repeat(6,minmax(230px,1fr));gap:12px;margin-top:16px;
+  overflow-x:auto;padding-bottom:8px}
+@media(max-width:1100px){.board{grid-template-columns:repeat(6,260px)}}
+.col{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:10px;min-height:140px}
+.col h2{font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--txt3);
+  margin:2px 4px 10px;display:flex;justify-content:space-between}
+.col h2 b{color:var(--txt2);font-weight:600}
+
+/* 策略卡 */
+.card{background:var(--surface2);border:1px solid var(--line2);border-radius:var(--r);padding:11px 12px;
+  margin-bottom:9px;cursor:pointer;transition:border-color .15s,transform .15s}
+.card:hover{border-color:#3a4a63;transform:translateY(-1px)}
+.card .nm{font-weight:600;font-size:13.5px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.card .fam{color:var(--txt3);font-size:11px;margin-top:2px}
+.mrow{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 10px;margin-top:9px;
+  padding-top:9px;border-top:1px solid var(--line)}
+.mrow div{display:flex;justify-content:space-between;font-size:11.5px;color:var(--txt3)}
+.mrow b{color:var(--txt);font-weight:600}
+.st{font-size:10.5px;padding:2px 7px;border-radius:999px;border:1px solid;white-space:nowrap}
+.st.draft{color:var(--txt3);border-color:var(--line2)}
+.st.backtested{color:var(--blue);border-color:#1e3a5f;background:#0e1c2e}
+.st.reviewed{color:var(--green);border-color:#1d4d36;background:#0c2018}
+.st.rejected{color:var(--red);border-color:#4d1d27;background:#200c11}
+.st.paper{color:var(--cyan);border-color:#12454d;background:#08222a}
+.st.awaiting_approval{color:var(--amber);border-color:#4d3d1d;background:#231a08}
+.st.live{color:#0a0e14;background:var(--green);border-color:var(--green);font-weight:700}
+.st.halted{color:var(--amber);border-color:#4d3d1d}
+.st.retired{color:var(--txt3);border-color:var(--line)}
+
+/* 审计点 */
+.checks{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+.chk{font-size:9.5px;padding:1px 5px;border-radius:4px;background:#0e1c2e;color:var(--blue);border:1px solid #1e3a5f}
+.chk.bad{background:#200c11;color:var(--red);border-color:#4d1d27}
+.btns{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+button{font:inherit;font-size:11.5px;padding:5px 10px;border-radius:8px;border:1px solid var(--line2);
+  background:#1b2433;color:var(--txt);cursor:pointer;transition:.15s}
+button:hover{background:#233047;border-color:#3a4a63}
+button.primary{background:var(--green);color:#06110b;border-color:var(--green);font-weight:700}
+button.warn{background:transparent;color:var(--amber);border-color:#4d3d1d}
+button.danger{background:transparent;color:var(--red);border-color:#4d1d27}
+button:disabled{opacity:.45;cursor:not-allowed}
+
+/* 详情抽屉 */
+.mask{position:fixed;inset:0;background:rgba(4,7,11,.72);backdrop-filter:blur(2px);display:none;z-index:40}
+.mask.on{display:block}
+.drawer{position:fixed;right:0;top:0;bottom:0;width:min(560px,94vw);background:var(--surface);
+  border-left:1px solid var(--line2);padding:18px;overflow:auto;z-index:41;transform:translateX(100%);
+  transition:transform .22s ease}
+.drawer.on{transform:none}
+.drawer h3{margin:0 0 4px;font-size:16px}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:12.5px;margin:12px 0}
+.kv span{color:var(--txt3)}
+.timeline{margin-top:14px;border-left:2px solid var(--line2);padding-left:12px}
+.timeline div{position:relative;margin-bottom:10px;font-size:12px;color:var(--txt2)}
+.timeline div::before{content:"";position:absolute;left:-17px;top:6px;width:7px;height:7px;
+  border-radius:50%;background:var(--blue)}
+.timeline b{color:var(--txt)}
+.auditrow{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:5px 0;
+  border-bottom:1px solid var(--line)}
+.ok{color:var(--green)}.no{color:var(--red)}
+.spin{display:inline-block;width:10px;height:10px;border:2px solid var(--line2);
+  border-top-color:var(--blue);border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.empty{color:var(--txt3);font-size:12px;text-align:center;padding:18px 6px}
+input{font:inherit;background:#0d131d;border:1px solid var(--line2);color:var(--txt);
+  border-radius:8px;padding:7px 9px;width:100%;margin:4px 0 10px}
+label{font-size:11.5px;color:var(--txt3)}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>策略流水线</h1>
+    <span class="sub">研究 → 回测 → 审计 → 纸交易 → 人工批准 → 实盘</span>
+    <span class="pill"><span class="dot" style="background:var(--green)"></span><span id="cnt">加载中…</span></span>
+    <span class="pill" id="policies">—</span>
+  </header>
+
+  <div class="board" id="board"></div>
+</div>
+
+<div class="mask" id="mask" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer"></aside>
+
+<script>
+const COLS = [
+  ['research', '① 研究 / 回测', ['draft', 'backtested']],
+  ['review',   '② 审计闸门',   ['reviewed']],
+  ['paper',    '③ 纸交易',     ['paper']],
+  ['approve',  '④ 待人工批准', ['awaiting_approval']],
+  ['live',     '⑤ 实盘',       ['live', 'halted']],
+  ['reject',   '✕ 已拒绝 / 退役', ['rejected', 'retired']],
+];
+const STATE_TXT = {draft:'草稿',backtested:'已回测',reviewed:'审计通过',rejected:'审计未过',
+  paper:'纸交易中',awaiting_approval:'待批准',live:'实盘运行',halted:'已暂停',retired:'已退役'};
+let DATA = null, CUR = null;
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = (v, n=2) => (v === null || v === undefined) ? '—' : Number(v).toFixed(n);
+
+async function load() {
+  try {
+    const d = await fetch('/api/strategies', {cache: 'no-store'}).then(r => r.json());
+    DATA = d;
+    render();
+  } catch (e) {
+    document.getElementById('board').innerHTML = '<div class="empty">加载失败:' + esc(e.message) + '</div>';
+  }
+}
+
+function render() {
+  const items = DATA.items || [];
+  const pol = DATA.policies || {};
+  document.getElementById('cnt').textContent =
+    `${items.length} 条策略 · ${items.filter(x => x.state === 'live').length} 实盘 · ` +
+    `${items.filter(x => x.state === 'paper').length} 纸交易 · ${items.filter(x => x.state === 'awaiting_approval').length} 待批准`;
+  document.getElementById('policies').textContent =
+    `T≥${fmt(pol.t_min,1)} · MAE<强平×${fmt(pol.mae_buffer,2)} · ${fmt(pol.cost_stress,1)}×成本压测 · 纸交易≥${pol.paper_min_days}天/${pol.paper_min_trades}笔`;
+
+  const board = document.getElementById('board');
+  board.innerHTML = COLS.map(([key, title, states]) => {
+    const list = items.filter(x => states.includes(x.state));
+    return `<div class="col"><h2>${esc(title)}<b>${list.length}</b></h2>` +
+      (list.length ? list.map(card).join('') : '<div class="empty">—</div>') + '</div>';
+  }).join('');
+}
+
+function card(s) {
+  const m = s.metrics || {}, a = s.audit || {};
+  const checks = (a.checks || []).slice(0, 8);
+  return `<div class="card" onclick="openDrawer('${s.id}')">
+    <div class="nm"><span>${esc(s.name)}</span><span class="st ${s.state}">${STATE_TXT[s.state] || s.state}</span></div>
+    <div class="fam">${esc(s.family)} · ${esc((s.symbols||[]).join('/'))} · ${s.spec?.leverage ?? '—'}x</div>
+    <div class="mrow">
+      <div><span>t 值</span><b class="${(m.t_stat ?? 0) >= 2 ? 'ok' : 'no'}">${fmt(m.t_stat)}</b></div>
+      <div><span>均值</span><b>${fmt(m.mean_bp)}bp</b></div>
+      <div><span>CI 下</span><b class="${(m.ci_low ?? -1) > 0 ? 'ok' : 'no'}">${fmt(m.ci_low)}</b></div>
+      <div><span>MAE</span><b>${fmt(m.max_mae_bp, 0)}bp</b></div>
+      <div><span>笔数</span><b>${m.n_trades ?? '—'}</b></div>
+      <div><span>命中</span><b>${m.hit_rate ? (m.hit_rate*100).toFixed(1)+'%' : '—'}</b></div>
+    </div>
+    ${checks.length ? `<div class="checks">${checks.map(c =>
+        `<span class="chk ${c.passed ? '' : 'bad'}" title="${esc(c.detail)}">${esc(c.id)}${c.passed ? '✓' : '✗'}</span>`).join('')}</div>` : ''}
+    <div class="btns" onclick="event.stopPropagation()">
+      ${s.state === 'backtested' || s.state === 'rejected' ? `<button onclick="act('${s.id}','review')">跑审计</button>` : ''}
+      ${s.state === 'reviewed' ? `<button class="primary" onclick="act('${s.id}','promote_paper')">进入纸交易</button>` : ''}
+      ${s.state === 'paper' ? `<button onclick="simTick('${s.id}')">模拟一次心跳</button>` : ''}
+      ${s.state === 'awaiting_approval' ? `<button class="primary" onclick="approve('${s.id}','${esc(s.name)}')">批准上实盘</button>` : ''}
+      ${s.state === 'live' ? `<button class="warn" onclick="act('${s.id}','halt')">暂停</button>` : ''}
+      <button onclick="openDrawer('${s.id}')">详情</button>
+    </div>
+  </div>`;
+}
+
+async function act(sid, action, extra = {}) {
+  const r = await fetch('/api/action', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({sid, action, by: localStorage.getItem('qe_by') || '', ...extra})
+  }).then(r => r.json());
+  if (r.error) alert('失败:' + r.error);
+  await load();
+  if (CUR === sid) openDrawer(sid);
+  return r;
+}
+
+function simTick(sid) {
+  const days = Number(prompt('模拟纸交易:已运行天数?', '15') || 0);
+  const trades = Number(prompt('纸交易笔数?', '24') || 0);
+  const mean = Number(prompt('每笔均值(bp)?', '18') || 0);
+  act(sid, 'paper_tick', {stats: {days, trades, mean_bp: mean, max_dd: -0.08}});
+}
+
+async function approve(sid, name) {
+  const by = prompt('批准人(必填,会记录在案):', localStorage.getItem('qe_by') || '');
+  if (!by) return;
+  localStorage.setItem('qe_by', by);
+  const typed = prompt(`这是真金白银的实盘。请重新输入策略名以确认:\n${name}`, '');
+  if (typed !== name) return alert('策略名不匹配,已取消');
+  const token = prompt('访问令牌(QE_TOKEN,未设置则留空):', '') || '';
+  const r = await act(sid, 'approve', {by, token, note: 'UI 人工批准'});
+  if (r.ok) alert(`已批准 ${name} 上实盘(批准人:${by})`);
+}
+
+async function openDrawer(sid) {
+  CUR = sid;
+  const d = await fetch('/api/strategy/' + sid, {cache: 'no-store'}).then(r => r.json());
+  const s = d.item, m = s.metrics || {}, a = s.audit || {};
+  const cur = (d.checks || []);
+  document.getElementById('drawer').innerHTML = `
+    <h3>${esc(s.name)} <span class="st ${s.state}">${STATE_TXT[s.state] || s.state}</span></h3>
+    <div class="sub">${esc(s.family)} · ${esc((s.symbols||[]).join('/'))} · 杠杆 ${s.spec?.leverage ?? '—'}x · 持仓 ${esc(s.spec?.hold_horizon || '—')}</div>
+    <div class="kv">
+      <span>笔数 / 天数</span><b>${m.n_trades ?? '—'} / ${m.n_days ?? '—'}</b>
+      <span>均值每笔</span><b>${fmt(m.mean_bp)} bp</b>
+      <span>t 值</span><b class="${(m.t_stat??0)>=2?'ok':'no'}">${fmt(m.t_stat)}</b>
+      <span>bootstrap CI</span><b>[${fmt(m.ci_low)}, ${fmt(m.ci_high)}]</b>
+      <span>样本外 / 验证</span><b>${fmt(m.oos_mean)} / ${fmt(m.val_mean)} bp</b>
+      <span>最大 MAE</span><b>${fmt(m.max_mae_bp,0)} bp</b>
+      <span>命中率</span><b>${m.hit_rate ? (m.hit_rate*100).toFixed(1)+'%' : '—'}</b>
+      <span>状态</span><b>${STATE_TXT[s.state] || s.state}</b>
+      ${s.approve_by ? `<span>批准人</span><b>${esc(s.approve_by)}</b>` : ''}
+      ${s.note ? `<span>备注</span><b>${esc(s.note)}</b>` : ''}
+    </div>
+    <h4 style="margin:16px 0 6px;font-size:12.5px;color:var(--txt2)">审计清单(${(a.passed ? '全部通过' : '存在未通过项')})</h4>
+    ${cur.length ? cur.map(c => `<div class="auditrow"><span>${esc(c.label)}<br><span class="sub">${esc(c.detail||'')}</span></span>
+      <b class="${c.passed?'ok':'no'}">${c.passed?'✓':'✗'}</b></div>`).join('') : '<div class="sub">尚未审计</div>'}
+    <h4 style="margin:16px 0 6px;font-size:12.5px;color:var(--txt2)">事件时间线</h4>
+    <div class="timeline">${(d.events||[]).map(e => `<div><b>${esc(e.kind)}</b>
+      <span class="sub">${new Date(e.ts*1000).toLocaleString('zh-CN')}</span><br>${esc(e.detail||'')}</div>`).join('') || '<div class="sub">无</div>'}</div>
+    <div style="margin-top:18px"><button onclick="closeDrawer()">关闭</button></div>`;
+  document.getElementById('mask').classList.add('on');
+  document.getElementById('drawer').classList.add('on');
+}
+
+function closeDrawer() {
+  document.getElementById('mask').classList.remove('on');
+  document.getElementById('drawer').classList.remove('on');
+  CUR = null;
+}
+
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>
