@@ -39,8 +39,19 @@ def _rate_ok(ip: str, limit: int = 120) -> bool:
     return True
 
 
+def _clean(o):
+    """把 NaN/Inf 变成 None —— 它们不是合法 JSON,JS 的 JSON.parse 会直接报错。"""
+    if isinstance(o, float):
+        return None if (o != o or o in (float("inf"), float("-inf"))) else o
+    if isinstance(o, dict):
+        return {k: _clean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_clean(v) for v in o]
+    return o
+
+
 def _json(obj, code=200):
-    body = json.dumps(obj, ensure_ascii=False, default=str).encode()
+    body = json.dumps(_clean(obj), ensure_ascii=False, default=str).encode()
     return code, "application/json; charset=utf-8", body
 
 
