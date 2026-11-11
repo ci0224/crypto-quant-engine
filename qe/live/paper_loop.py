@@ -239,6 +239,40 @@ def tick(stgy):
 
 
 
+def _mk_signal(df, name):
+    """按策略声明的信号口径算入场条件(与回测同一套定义)。df 需含 close/volume。"""
+    if df is None or len(df) < 30:
+        return False
+    c = df["close"]
+    if name in ("rsi14<30", "rsi1430"):
+        d = c.diff()
+        up = d.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+        dn = (-d.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+        r = 100 - 100 / (1 + up / dn.replace(0, float("nan"))).fillna(50)
+        return bool(r.iloc[-1] < 30)
+    if name == "keltner":
+        ema = c.ewm(span=20, adjust=False).mean()
+        tr = (df["high"] - df["low"]).ewm(alpha=1 / 20, adjust=False).mean()
+        return bool(c.iloc[-1] < (ema - 2 * tr).iloc[-1])
+    if name == "vwap-2sd" and "volume" in df:
+        v = df["volume"]
+        vwap = (c * v).rolling(288).sum() / v.rolling(288).sum()
+        sd = c.rolling(288).std()
+        return bool(c.iloc[-1] < (vwap - 2 * sd).iloc[-1])
+    if name == "boll40x25":
+        ma, sd = c.rolling(40).mean(), c.rolling(40).std()
+        return bool(c.iloc[-1] < (ma - 2.5 * sd).iloc[-1])
+    ma, sd = c.rolling(20).mean(), c.rolling(20).std()
+    return bool(c.iloc[-1] < (ma - 2 * sd).iloc[-1])
+
+
+def _candles_df(coin, interval="5m", days=2):
+    try:
+        return hl.candles(coin, interval, days)
+    except Exception:
+        return None
+
+
 def tick_testnet(stgy):
     """venue=testnet:真实挂单。由 pipeline 状态驱动,不用 cron。
 
@@ -311,11 +345,11 @@ def tick_testnet(stgy):
             continue
 
         # ---------- ③ 新信号 ----------
-        b5 = _candles(c, "5m", 60)
-        if b5 is None or len(b5) < 30:
+        bdf = _candles_df(c, "5m", 2)
+        if bdf is None or len(bdf) < 30:
             continue
-        state = boll_state(b5)
-        if not (state.iloc[-1] > 0 and 8 <= b5.index[-1].hour < 20):
+        _sg = spec.get("signal") or "boll20"
+        if not (_mk_signal(bdf, _sg) and 8 <= bdf.index[-1].hour < 20):
             continue
         r = ex.place_alo(c, True, notional, 100.0)
         if not r.get("oid"):
@@ -323,15 +357,16 @@ def tick_testnet(stgy):
             continue
         st["orders"][c] = {"oid": r["oid"], "coin": c, "ref": ex.mid(c), "limit": r["px"],
                            "tp_px": r["px"] * 1.0120, "sz": r["sz"],
-                           "sig_ts": b5.index[-1].timestamp(), "placed_ts": now,
+                           "sig_ts": bdf.index[-1].timestamp(), "placed_ts": now,
                            "filled": False, "tp_oid": None}
         ledger.add(sid=sid, coin=c, source="testnet", kind="signal",
-                   signal_ts=b5.index[-1].timestamp(), ref_px=ex.mid(c),
+                   signal_ts=bdf.index[-1].timestamp(), ref_px=ex.mid(c),
                    limit_px=r["px"], target_px=r["px"] * 1.0120)
         notes.append(f"{c} 挂单 {r['sz']} @ {r['px']:.1f} (oid {r['oid']})")
 
-    # 汇总到 pipeline
+    # 汇总到 pipeline(统一返回结构,与模拟分支一致)
     tr = [x for x in ledger.rows(sid, source="testnet") if x["kind"] == "trade"]
+    out = {"days": 0.0, "trades": len(tr), "mean_bp": 0.0, "equity": 10000.0, "orders": len(st["orders"])}
     if tr:
         nets = [float(x["net_bp"]) for x in tr]
         first = st.setdefault("first_ts", now)
@@ -340,10 +375,11 @@ def tick_testnet(stgy):
                  "mean_bp": round(sum(nets) / len(nets), 2),
                  "max_dd": round(min(0.0, min(nets) / 100.0), 4)}
         pipeline.paper_tick(sid, stats, source="loop")
+        out.update(days=stats["days"], trades=stats["trades"], mean_bp=stats["mean_bp"])
     _save(st, path)
     if notes:
         print(f"  [{stgy['name']}] " + " | ".join(notes))
-    return {"ok": True, "trades": len(tr), "orders": len(st["orders"])}
+    return out
 
 
 def main():

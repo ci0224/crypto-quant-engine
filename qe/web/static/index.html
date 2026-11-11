@@ -171,9 +171,19 @@ function paperLine(s) {
   const p = s.paper || null;
   if (!p) {
     if (s.state === 'awaiting_approval') return `<div class="pl bad">⚠️ 无真实纸交易记录 —— 该状态不是纸交易达标来的,请退回纸交易</div>`;
-    if (s.state === 'paper') return `<div class="pl">纸交易:未开始(等首个信号)</div>`;
+    if (s.state === 'paper') {
+      const vv = (s.spec && s.spec.venue) || 'paper';
+      const vt = vv === 'testnet' ? '<b style="color:#22c55e">testnet 真实撮合</b>'
+               : vv === 'mainnet' ? '<b style="color:#ef4444">主网实盘</b>'
+               : '<b style="color:#94a3b8">本地模拟</b>';
+      return `<div class="pl">沙盘:${vt} · 未开始(等首个信号)</div>`;
+    }
     return '';
   }
+  const venue = (s.spec && s.spec.venue) || 'paper';
+  const vtag = venue === 'testnet' ? '<b style="color:#22c55e">testnet 真实撮合</b>'
+             : venue === 'mainnet' ? '<b style="color:#ef4444">主网实盘</b>'
+             : '<b style="color:#94a3b8">本地模拟</b>';
   const src = p.source || 'unknown';
   if (src !== 'loop') {
     return `<div class="pl bad">⚠️ 纸交易数据来源=${esc(src)}(非真实循环,不可用于审批)</div>`;

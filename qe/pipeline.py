@@ -48,8 +48,15 @@ def review(sid, note=""):
     if s["state"] not in ("backtested", "rejected", "reviewed"):
         raise IllegalTransition(f"{s['state']} 不能做 review")
     res = gate.evaluate(s.get("metrics") or {}, s.get("spec") or {})
-    registry.update(sid, audit=res, state="reviewed" if res["passed"] else "rejected")
     registry.event(sid, "review", f"score={res['score']} blockers={res['blockers'][:4]}")
+    if not res["passed"]:
+        registry.update(sid, audit=res, state="rejected")
+        return registry.get(sid), res
+    # 审计通过 → 自动进入沙盘(paper 状态);venue 默认 testnet(HL 真实撮合)
+    sp = dict(s.get("spec") or {})
+    sp.setdefault("venue", "testnet")
+    registry.update(sid, audit=res, state="paper", spec=sp)
+    registry.event(sid, "auto_promote", "审计通过 → 自动进入沙盘(venue=%s)" % sp["venue"])
     return registry.get(sid), res
 
 
