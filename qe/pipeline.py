@@ -111,3 +111,14 @@ def retire(sid, reason=""):
     registry.update(sid, state="retired", note=reason)
     registry.event(sid, "retire", reason)
     return registry.get(sid)
+
+def reset_paper(sid: str, note: str = ""):
+    """退回纸交易并清空进度(用于:演示数据污染、或想重跑一轮纸交易)。"""
+    s = registry.get(sid)
+    if not s:
+        raise IllegalTransition(f"策略不存在: {sid}")
+    if s["state"] not in ("paper", "awaiting_approval", "halted"):
+        raise IllegalTransition(f"{s['state']} → paper(只有 paper/awaiting_approval/halted 可以退回纸交易)")
+    registry.update(sid, state="paper", paper_json=None)
+    registry.event(sid, "reset_paper", note or "退回纸交易,清空历史进度")
+    return registry.get(sid)

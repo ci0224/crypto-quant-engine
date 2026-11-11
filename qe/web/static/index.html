@@ -152,6 +152,17 @@ function render() {
   }).join('');
 }
 
+function paperLine(s) {
+  const p = s.paper || null;
+  if (!p) {
+    if (s.state === 'awaiting_approval') return `<div class="pl bad">⚠️ 无真实纸交易记录 —— 该状态不是纸交易达标来的,请退回纸交易</div>`;
+    if (s.state === 'paper') return `<div class="pl">纸交易:未开始(等首个信号)</div>`;
+    return '';
+  }
+  const ok = (p.days ?? 0) >= 14 && (p.trades ?? 0) >= 20;
+  return `<div class="pl ${ok ? '' : 'bad'}">纸交易:${p.days ?? 0} 天 / ${p.trades ?? 0} 笔 / ${fmt(p.mean_bp)}bp${p.demo ? ' · 演示数据' : ''}</div>`;
+}
+
 function card(s) {
   const m = s.metrics || {}, a = s.audit || {};
   const checks = (a.checks || []).slice(0, 8);
@@ -166,6 +177,7 @@ function card(s) {
       <div><span>笔数</span><b>${m.n_trades ?? '—'}</b></div>
       <div><span>命中</span><b>${m.hit_rate ? (m.hit_rate*100).toFixed(1)+'%' : '—'}</b></div>
     </div>
+    ${paperLine(s)}
     ${checks.length ? `<div class="checks">${checks.map(c =>
         `<span class="chk ${c.passed ? '' : 'bad'}" title="${esc(c.detail)}">${esc(c.id)}${c.passed ? '✓' : '✗'}</span>`).join('')}</div>` : ''}
     <div class="btns" onclick="event.stopPropagation()">
@@ -173,6 +185,7 @@ function card(s) {
       ${s.state === 'reviewed' ? `<button class="primary" onclick="act('${s.id}','promote_paper')">进入纸交易</button>` : ''}
       ${s.state === 'paper' ? `<button onclick="simTick('${s.id}')">模拟一次心跳</button>` : ''}
       ${s.state === 'awaiting_approval' ? `<button class="primary" onclick="approve('${s.id}','${esc(s.name)}')">批准上实盘</button>` : ''}
+      ${['paper','awaiting_approval','halted'].includes(s.state) ? `<button class="warn" onclick="act('${s.id}','reset_paper')">退回纸交易</button>` : ''}
       ${s.state === 'live' ? `<button class="warn" onclick="act('${s.id}','halt')">暂停</button>` : ''}
       <button onclick="openDrawer('${s.id}')">详情</button>
     </div>

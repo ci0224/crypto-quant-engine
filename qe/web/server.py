@@ -97,6 +97,8 @@ def handle_api(method: str, path: str, query: dict, payload: dict | None, header
             if action == "approve":
                 s = pipeline.approve(sid, by or "unknown", p.get("note", ""))
                 return _json({"ok": True, "state": s["state"], "approve_by": s["approve_by"]})
+            if action == "reset_paper":
+                return _json({"ok": True, "state": pipeline.reset_paper(sid, p.get("note", ""))["state"]})
             if action == "halt":
                 return _json({"ok": True, "state": pipeline.halt(sid, p.get("note", ""))["state"]})
             if action == "retire":
