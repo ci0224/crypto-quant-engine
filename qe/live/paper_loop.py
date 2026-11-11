@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .. import ledger, pipeline, registry
+from . import testnet_exec as tne
 from ..config import Config, Costs
 from ..data import hyperliquid as hl
 from ..strategies import library as S
@@ -66,8 +67,20 @@ def _weights(stgy, coins):
     return None
 
 
+_TN = None
+
+
+def _tn():
+    global _TN
+    if _TN is None:
+        _TN = tne.TestnetExec()
+    return _TN
+
+
 def tick(stgy):
     sid, name, fam = stgy["id"], stgy["name"], stgy["family"]
+    if ((stgy.get("spec") or {}).get("venue") == "testnet"):
+        return tick_testnet(stgy)
     st, path = _state(sid)
     spec = stgy["spec"] or {}
     lev = float(spec.get("leverage") or 1.0)
@@ -146,7 +159,11 @@ def tick(stgy):
                 continue
             # 挂单有效期 5 分钟(与回测一致)
             if not o["filled"]:
-                sig_t = pd.Timestamp(o["sig_ts"], unit="s", tz="UTC")
+                _ts = o.get("sig_ts") or o.get("placed_ts")
+                if _ts is None:
+                    st["orders"].pop(key, None)
+                    continue
+                sig_t = pd.Timestamp(_ts, unit="s", tz="UTC")
                 # 信号 bar 收盘后才挂单 → 只在其后的 5 分钟内判定成交(避免前视)
                 win = c1.loc[sig_t: sig_t + pd.Timedelta(minutes=4)]
                 if len(win) == 0:
@@ -166,7 +183,7 @@ def tick(stgy):
                     st["pnl_bp"].append(net)
                     st["trades"] += 1
                     ledger.add(sid=o["sid"], coin=o["coin"], source="loop", kind="trade",
-                               signal_ts=o["sig_ts"], ref_px=o["ref"], limit_px=o["limit"],
+                               signal_ts=o.get("sig_ts") or o.get("placed_ts"), ref_px=o["ref"], limit_px=o["limit"],
                                target_px=o["target"], fill_ts=o.get("fill_ts"),
                                fill_px=o["limit"], exit_ts=time.time(), exit_px=o["target"],
                                hold_min=(time.time() - o.get("fill_ts", time.time())) / 60,
@@ -183,7 +200,7 @@ def tick(stgy):
                         st["pnl_bp"].append(pnl)
                         st["trades"] += 1
                         ledger.add(sid=o["sid"], coin=o["coin"], source="loop", kind="trade",
-                                   signal_ts=o["sig_ts"], ref_px=o["ref"], limit_px=o["limit"],
+                                   signal_ts=o.get("sig_ts") or o.get("placed_ts"), ref_px=o["ref"], limit_px=o["limit"],
                                    target_px=o["target"], fill_ts=o.get("fill_ts"),
                                    fill_px=o["limit"], exit_ts=time.time(), exit_px=o["rest_px"],
                                    hold_min=(time.time() - o.get("fill_ts", time.time())) / 60,
@@ -195,7 +212,7 @@ def tick(stgy):
                         st["pnl_bp"].append(pnl)
                         st["trades"] += 1
                         ledger.add(sid=o["sid"], coin=o["coin"], source="loop", kind="trade",
-                                   signal_ts=o["sig_ts"], ref_px=o["ref"], limit_px=o["limit"],
+                                   signal_ts=o.get("sig_ts") or o.get("placed_ts"), ref_px=o["ref"], limit_px=o["limit"],
                                    target_px=o["target"], fill_ts=o.get("fill_ts"),
                                    fill_px=o["limit"], exit_ts=time.time(), exit_px=px,
                                    hold_min=(time.time() - o.get("fill_ts", time.time())) / 60,
@@ -219,6 +236,114 @@ def tick(stgy):
              "equity": round(st["eq"], 2), "max_dd": round(dd, 4)}
     pipeline.paper_tick(sid, stats, source="loop")
     return stats
+
+
+
+def tick_testnet(stgy):
+    """venue=testnet:真实挂单。由 pipeline 状态驱动,不用 cron。
+
+    简化点(与回测的已知差异,对账器会量化):
+      · 超时出场用市价平仓(taker),回测是挂限价再等 240 分钟 → 我们更保守
+    """
+    from ..strict.data import boll_state
+
+    sid = stgy["id"]
+    ex = _tn()
+    st, path = _state(sid)
+    st.setdefault("orders", {})
+    spec = stgy["spec"] or {}
+    notional = float(spec.get("notional_usd") or 20.0)
+    now = time.time()
+    oo_ids = {o["oid"] for o in ex.open_orders()}
+    notes = []
+
+    for c in stgy["symbols"]:
+        od = st["orders"].get(c)
+        pos = ex.position(c)
+
+        # ---------- ① 已成交的持仓:管理出场 ----------
+        if od and od.get("filled"):
+            held = (now - od["fill_ts"]) / 60.0
+            if abs(pos) < 1e-9:
+                g = (od["tp_px"] / od["fill_px"] - 1) * 1e4
+                net = g - 3.0
+                ledger.add(sid=sid, coin=c, source="testnet", kind="trade", signal_ts=od.get("sig_ts"),
+                           ref_px=od["ref"], limit_px=od["limit"], fill_ts=od["fill_ts"],
+                           fill_px=od["fill_px"], exit_ts=now, exit_px=od["tp_px"],
+                           hold_min=held, gross_bp=g, fee_bp=3.0, net_bp=net, reason="target")
+                st["orders"].pop(c)
+                notes.append(f"{c} 止盈 {net:+.1f}bp")
+                continue
+            if od.get("tp_oid") and od["tp_oid"] not in oo_ids:
+                od["tp_oid"] = None
+            if od.get("tp_oid") is None:
+                r = ex.place_tp(c, od["sz"], od["tp_px"])
+                od["tp_oid"] = r.get("oid")
+            if held > 55 and abs(pos) > 1e-9:
+                ex.close_market(c, pos)
+                g = (float(ex.mid(c)) / od["fill_px"] - 1) * 1e4
+                net = g - 6.5
+                ledger.add(sid=sid, coin=c, source="testnet", kind="trade", signal_ts=od.get("sig_ts"),
+                           ref_px=od["ref"], limit_px=od["limit"], fill_ts=od["fill_ts"],
+                           fill_px=od["fill_px"], exit_ts=now, exit_px=float(ex.mid(c)),
+                           hold_min=held, gross_bp=g, fee_bp=6.5, net_bp=net,
+                           reason="timeout_taker")
+                st["orders"].pop(c)
+                notes.append(f"{c} 超时平仓 {net:+.1f}bp")
+            continue
+
+        # ---------- ② 有挂单未成交 ----------
+        if od and not od.get("filled"):
+            age_min = (now - od["placed_ts"]) / 60.0
+            if od["oid"] not in oo_ids:
+                if abs(pos) > 1e-9:
+                    od.update(filled=True, fill_ts=now, fill_px=od["limit"], sz=abs(pos))
+                    r = ex.place_tp(c, abs(pos), od["limit"] * (1 + 0.0120))
+                    od["tp_oid"] = r.get("oid")
+                    notes.append(f"{c} 成交 @ {od['limit']:.1f}")
+                else:
+                    st["orders"].pop(c)
+                    notes.append(f"{c} 挂单消失(撤单/未成交)")
+            elif age_min > 5:
+                ex.cancel(c, od["oid"])
+                st["orders"].pop(c)
+                notes.append(f"{c} 5 分钟未成交,撤单")
+            continue
+
+        # ---------- ③ 新信号 ----------
+        b5 = _candles(c, "5m", 60)
+        if b5 is None or len(b5) < 30:
+            continue
+        state = boll_state(b5)
+        if not (state.iloc[-1] > 0 and 8 <= b5.index[-1].hour < 20):
+            continue
+        r = ex.place_alo(c, True, notional, 100.0)
+        if not r.get("oid"):
+            notes.append(f"{c} 下单失败 {str(r.get('raw'))[:60]}")
+            continue
+        st["orders"][c] = {"oid": r["oid"], "coin": c, "ref": ex.mid(c), "limit": r["px"],
+                           "tp_px": r["px"] * 1.0120, "sz": r["sz"],
+                           "sig_ts": b5.index[-1].timestamp(), "placed_ts": now,
+                           "filled": False, "tp_oid": None}
+        ledger.add(sid=sid, coin=c, source="testnet", kind="signal",
+                   signal_ts=b5.index[-1].timestamp(), ref_px=ex.mid(c),
+                   limit_px=r["px"], target_px=r["px"] * 1.0120)
+        notes.append(f"{c} 挂单 {r['sz']} @ {r['px']:.1f} (oid {r['oid']})")
+
+    # 汇总到 pipeline
+    tr = [x for x in ledger.rows(sid, source="testnet") if x["kind"] == "trade"]
+    if tr:
+        nets = [float(x["net_bp"]) for x in tr]
+        first = st.setdefault("first_ts", now)
+        days = max((now - first) / 86400.0, 0.01)
+        stats = {"days": round(days, 3), "trades": len(nets),
+                 "mean_bp": round(sum(nets) / len(nets), 2),
+                 "max_dd": round(min(0.0, min(nets) / 100.0), 4)}
+        pipeline.paper_tick(sid, stats, source="loop")
+    _save(st, path)
+    if notes:
+        print(f"  [{stgy['name']}] " + " | ".join(notes))
+    return {"ok": True, "trades": len(tr), "orders": len(st["orders"])}
 
 
 def main():

@@ -1,0 +1,86 @@
+"""Testnet 执行器:由 pipeline 中 venue=testnet 的策略调用(不是 cron)。
+
+与 PaperExecutor 的区别:
+  PaperExecutor  —— 我们的代码模拟"会不会成交"
+  TestnetExec    —— 真的挂进 HL 撮合引擎,成交与否由市场和队列决定
+
+所有动作写入 ledger(source="testnet"),供对账器与回测比对。
+"""
+from __future__ import annotations
+
+import pathlib
+import time
+
+from eth_account import Account
+from hyperliquid.exchange import Exchange
+from hyperliquid.info import Info
+
+TESTNET = "https://api.hyperliquid-testnet.xyz"
+ENVF = pathlib.Path("/home/ubuntu/.hermes-secrets/hl_api_wallet.env")
+MASTER = "0x29ac98f5b4115dd7dd94abf8c46d6b3c1c519061"
+
+
+def _env() -> dict:
+    return dict(l.split("=", 1) for l in ENVF.read_text().splitlines() if "=" in l)
+
+
+class TestnetExec:
+    def __init__(self) -> None:
+        self.ex = Exchange(Account.from_key(_env()["HL_API_KEY"]), TESTNET,
+                           account_address=MASTER)
+        self.info = Info(TESTNET, skip_ws=True)
+
+    def mid(self, coin: str) -> float:
+        return float(self.info.all_mids()[coin])
+
+    def equity(self) -> float:
+        st = self.info.user_state(MASTER)
+        spot = self.info.spot_user_state(MASTER)
+        s = sum(float(b["total"]) for b in (spot.get("balances") or []) if b["coin"] == "USDC")
+        return float(st["marginSummary"]["accountValue"]) + s
+
+    def place_alo(self, coin: str, is_buy: bool, notional: float, offset_bp: float):
+        mid = self.mid(coin)
+        px = mid * (1 - offset_bp / 1e4) if is_buy else mid * (1 + offset_bp / 1e4)
+        # BTC 的 tick size 是 1(整数价),其它保留 1-2 位
+        px = float(round(px)) if coin == "BTC" else round(px, 2)
+        sz = round(notional / px, 5)
+        sz = max(sz, 0.0001 if coin == "BTC" else 0.001)
+        res = self.ex.order(coin, is_buy, sz, px, {"limit": {"tif": "Alo"}})
+        oid = None
+        try:
+            oid = res["response"]["data"]["statuses"][0]["resting"]["oid"]
+        except (KeyError, IndexError, TypeError):
+            pass
+        return {"px": px, "sz": sz, "oid": oid, "raw": res}
+
+    def place_tp(self, coin: str, sz: float, tp_px: float):
+        res = self.ex.order(coin, False, sz, round(tp_px, 1), {"limit": {"tif": "Alo"}})
+        oid = None
+        try:
+            oid = res["response"]["data"]["statuses"][0]["resting"]["oid"]
+        except (KeyError, IndexError, TypeError):
+            pass
+        return {"oid": oid, "raw": res}
+
+    def cancel(self, coin: str, oid: int) -> dict:
+        try:
+            return self.ex.cancel(coin, oid)
+        except Exception as e:  # noqa: BLE001
+            return {"err": str(e)}
+
+    def open_orders(self) -> list:
+        return self.info.open_orders(MASTER)
+
+    def fills(self) -> list:
+        return self.info.user_fills(MASTER)
+
+    def position(self, coin: str) -> float:
+        st = self.info.user_state(MASTER)
+        for p in st.get("assetPositions") or []:
+            if p["position"]["coin"] == coin:
+                return float(p["position"]["szi"])
+        return 0.0
+
+    def close_market(self, coin: str, sz: float) -> dict:
+        return self.ex.market_close(coin, abs(sz))
