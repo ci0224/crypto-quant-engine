@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Testnet 资金划转</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0e14;color:#e9eef6;font:15px/1.6 -apple-system,"Segoe UI",sans-serif;
+     display:flex;min-height:100vh;align-items:center;justify-content:center;padding:20px}
+.card{background:#111722;border:1px solid #1e2635;border-radius:16px;padding:28px;max-width:460px;width:100%}
+h1{font-size:19px;margin-bottom:6px}
+.sub{color:#8b97ab;font-size:13px;margin-bottom:20px}
+.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #1a2130;font-size:14px}
+.row b{font-variant-numeric:tabular-nums}
+button{width:100%;margin-top:18px;padding:13px;border:0;border-radius:10px;background:#3b82f6;
+       color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+button:disabled{background:#243044;color:#5b6a80;cursor:not-allowed}
+#out{margin-top:16px;font-size:13px;white-space:pre-wrap;word-break:break-all;color:#9fb0c7}
+.ok{color:#22c55e}.bad{color:#ef4444}
+.warn{background:#2a1f0b;border:1px solid #6b4a10;color:#f0b23f;padding:10px 12px;border-radius:8px;
+      font-size:13px;margin-bottom:16px}
+</style></head>
+<body><div class="card">
+<h1>Testnet 资金划转(Spot → Perps)</h1>
+<div class="sub">用你自己的钱包签名,把测试币划到永续账户</div>
+<div class="warn" id="warn" hidden></div>
+<div class="row"><span>目标账户</span><b id="master">0x29ac…9061</b></div>
+<div class="row"><span>连接的钱包</span><b id="acct">未连接</b></div>
+<div class="row"><span>划转金额</span><b id="amt">990.0 USDC</b></div>
+<div class="row"><span>环境</span><b>Hyperliquid Testnet</b></div>
+<button id="btn">连接钱包并签名划转</button>
+<div id="out"></div>
+</div>
+<script>
+const MASTER = "0x29ac98f5b4115dd7dd94abf8c46d6b3c1c519061";
+const AMOUNT = "990.0";
+const API = "https://api.hyperliquid-testnet.xyz/exchange";
+const out = (m, cls) => { const el = document.getElementById("out");
+  el.innerHTML = cls ? `<span class="${cls}">${m}</span>` : m; };
+
+document.getElementById("master").textContent = MASTER.slice(0, 10) + "…" + MASTER.slice(-4);
+
+async function connect() {
+  if (!window.ethereum) throw new Error("没检测到钱包插件(请用装了 MetaMask/Rabby 的浏览器打开)");
+  const accts = await window.ethereum.request({ method: "eth_requestAccounts" });
+  const acct = accts[0];
+  document.getElementById("acct").textContent = acct.slice(0, 10) + "…" + acct.slice(-4);
+  if (acct.toLowerCase() !== MASTER.toLowerCase()) {
+    document.getElementById("warn").hidden = false;
+    document.getElementById("warn").textContent =
+      "⚠️ 当前钱包不是目标账户。请切换到 " + MASTER.slice(0, 10) + "… 再试(否则会划转另一个账户的余额)。";
+    return null;
+  }
+  return acct;
+}
+
+document.getElementById("btn").onclick = async () => {
+  const btn = document.getElementById("btn");
+  btn.disabled = true;
+  try {
+    const acct = await connect();
+    if (!acct) { btn.disabled = false; return; }
+    out("请在弹出的钱包窗口里点「签名」…");
+    const nonce = Date.now();
+    const typed = {
+      domain: { name: "HyperliquidSignTransaction", version: "1", chainId: 421614,
+                verifyingContract: "0x0000000000000000000000000000000000000000" },
+      types: {
+        "HyperliquidTransaction:UsdClassTransfer": [
+          { name: "hyperliquidChain", type: "string" },
+          { name: "amount", type: "string" },
+          { name: "toPerp", type: "bool" },
+          { name: "nonce", type: "uint64" }
+        ],
+        EIP712Domain: [
+          { name: "name", type: "string" }, { name: "version", type: "string" },
+          { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }
+        ]
+      },
+      primaryType: "HyperliquidTransaction:UsdClassTransfer",
+      message: { hyperliquidChain: "Testnet", amount: AMOUNT, toPerp: true, nonce }
+    };
+    const sig = await window.ethereum.request({
+      method: "eth_signTypedData_v4", params: [acct, JSON.stringify(typed)]
+    });
+    out("已签名,提交到 Hyperliquid…");
+    const action = { type: "usdClassTransfer", hyperliquidChain: "Testnet",
+                     signatureChainId: "0x66eee", amount: AMOUNT, toPerp: true, nonce };
+    const body = { action, nonce, signature: {
+      r: "0x" + sig.slice(2, 66), s: "0x" + sig.slice(66, 130),
+      v: parseInt(sig.slice(130, 132), 16) } };
+    const res = await fetch(API, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const txt = await res.text();
+    if (txt.includes('"ok"')) { out("✅ 划转成功!\n" + txt, "ok"); }
+    else { out("❌ 被拒:\n" + txt, "bad"); }
+  } catch (e) {
+    out("❌ " + (e.message || e), "bad");
+  }
+  btn.disabled = false;
+};
+</script></body></html>

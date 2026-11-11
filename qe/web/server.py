@@ -167,7 +167,8 @@ class H(BaseHTTPRequestHandler):
         if u.path.startswith("/api/"):
             code, ct, body = handle_api("GET", u.path, parse_qs(u.query), None)
             return self._send(code, ct, body)
-        rel = "index.html" if u.path in ("/", "") else u.path.lstrip("/")
+        alias = {"/": "index.html", "": "index.html", "/transfer": "transfer.html"}
+        rel = alias.get(u.path, u.path.lstrip("/"))
         if ".." in rel:
             return self._send(404, "text/plain", b"not found")
         fp = (STATIC / rel).resolve()
