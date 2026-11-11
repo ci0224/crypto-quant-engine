@@ -61,7 +61,34 @@ def _strategies():
     return out
 
 
+
+
+def _reconcile():
+    """读最近一次对账结果(每个策略取最新一条)。"""
+    import sqlite3
+    from pathlib import Path
+    db = Path(__file__).resolve().parent.parent.parent / "data" / "ledger.db"
+    out = {}
+    if not db.exists():
+        return out
+    try:
+        c = sqlite3.connect(db, timeout=5)
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            "SELECT r.* FROM reconcile_runs r JOIN (SELECT sid, MAX(ts) mt FROM reconcile_runs GROUP BY sid) "
+            "m ON r.sid=m.sid AND r.ts=m.mt").fetchall()
+        for r in rows:
+            out[r["sid"]] = {"ts": r["ts"], "days": r["days"], "parity": r["parity"],
+                             "trades_loop": r["trades_loop"], "trades_bt": r["trades_bt"],
+                             "paired": r["paired"], "mean_diff": r["mean_diff"],
+                             "missing": r["missing"], "extra": r["extra"]}
+    except Exception:
+        pass
+    return out
+
 def handle_api(method: str, path: str, query: dict, payload: dict | None, headers=None):
+    if method == "GET" and path == "/api/reconcile":
+        return _json({"items": _reconcile()})
     if method == "GET" and path == "/api/strategies":
         return _json({"items": _strategies(),
                       "policies": {"paper_min_days": pipeline.PAPER_MIN_DAYS,

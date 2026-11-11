@@ -127,7 +127,7 @@ def main() -> int:
         loop_sig = ledger.rows(sid, "loop", "signal", since)
         loop_tr = ledger.rows(sid, "loop", "trade", since)
         print(f"  🔁 已按纸交易规则回放:信号 {len(loop_sig)} / 成交 {n_r}")
-    sig = (boll_state(b5["close"], 20, 2.0) > 0)
+    sig = (boll_state(b5["close"], 20, 2.0) > 0).to_numpy(dtype=bool)
     cfg = StrictCfg(through_bp=2.0, fill_rate=0.85, taker_exit_prob=0.514)
     r = run(b1, b5, sig, load_funding(coin), cfg)
     td = r["trades"]
@@ -148,7 +148,7 @@ def main() -> int:
     # ---- ① 信号一致率(按 5 分钟桶对齐) ----
     ls = {bucket(x["signal_ts"]) for x in loop_sig}
     bs_ts = set()
-    lo_idx = b5.index[(boll_state(b5["close"], 20, 2.0) > 0) &
+    lo_idx = b5.index[(boll_state(b5["close"], 20, 2.0) > 0).to_numpy(dtype=bool) &
                       (b5.index.hour >= 8) & (b5.index.hour < 20)]
     bs_ts = {bucket(t.timestamp()) for t in lo_idx}
     inter = ls & bs_ts

@@ -125,9 +125,15 @@ let DATA = null, CUR = null;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = (v, n=2) => (v === null || v === undefined) ? '—' : Number(v).toFixed(n);
 
+let RECON = {};
+
 async function load() {
   try {
-    const d = await fetch('/api/strategies', {cache: 'no-store'}).then(r => r.json());
+    const [d, rc] = await Promise.all([
+      fetch('/api/strategies', {cache: 'no-store'}).then(r => r.json()),
+      fetch('/api/reconcile', {cache: 'no-store'}).then(r => r.json()).catch(() => ({items: {}}))
+    ]);
+    RECON = (rc && rc.items) || {};
     DATA = d;
     render();
   } catch (e) {
@@ -150,6 +156,15 @@ function render() {
     return `<div class="col"><h2>${esc(title)}<b>${list.length}</b></h2>` +
       (list.length ? list.map(card).join('') : '<div class="empty">—</div>') + '</div>';
   }).join('');
+}
+
+function reconLine(s) {
+  const r = RECON[s.id];
+  if (!r) return '';
+  const ok = r.parity >= 0.95 && Math.abs(r.mean_diff) <= 5 && r.missing <= 3;
+  const col = ok ? 'var(--green)' : '#f59e0b';
+  return `<div class="rows" style="color:${col}">对账(${r.days}天):一致率 ${(r.parity*100).toFixed(1)}% · `
+    + `成交 ${r.trades_loop}/${r.trades_bt} · 偏差 ${r.mean_diff>=0?'+':''}${r.mean_diff.toFixed(1)}bp · 漏 ${r.missing} ${ok?'✅':'⚠️'}</div>`;
 }
 
 function paperLine(s) {
@@ -182,6 +197,7 @@ function card(s) {
       <div><span>命中</span><b>${m.hit_rate ? (m.hit_rate*100).toFixed(1)+'%' : '—'}</b></div>
     </div>
     ${paperLine(s)}
+    ${reconLine(s)}
     ${(s.live_checks || []).map(c => `<div class="pl ${c.passed ? '' : 'bad'}">${c.passed ? '✅' : '🚫'} G11 实盘门禁:${esc(c.label)} → ${esc(c.detail)}</div>`).join('')}
     ${checks.length ? `<div class="checks">${checks.map(c =>
         `<span class="chk ${c.passed ? '' : 'bad'}" title="${esc(c.detail)}">${esc(c.id)}${c.passed ? '✓' : '✗'}</span>`).join('')}</div>` : ''}

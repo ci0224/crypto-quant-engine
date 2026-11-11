@@ -64,10 +64,13 @@ def run(bars1m: pd.DataFrame, bars5: pd.DataFrame, signal: pd.Series,
     pos = np.searchsorted(t1.values, (bars5.index + pd.Timedelta(minutes=5)).values, side="left")
 
     hours = set(range(cfg.hours[0], cfg.hours[1]))
-    c5 = bars5["close"].values
-    sig = np.asarray(signal.fillna(False).values, dtype=bool)
-    sig = sig & np.array([ts.hour in hours for ts in bars5.index])
-    sig &= np.isfinite(c5)
+    c5 = np.asarray(bars5["close"].values, dtype=float)
+    if isinstance(signal, pd.Series):
+        sig = signal.fillna(False).to_numpy(dtype=bool)
+    else:
+        sig = np.asarray(signal, dtype=bool)
+    hour_mask = np.array([getattr(ts, "hour", -1) in hours for ts in bars5.index], dtype=bool)
+    sig = sig & hour_mask & np.isfinite(c5)
 
     trades = []
     free_from = 0
