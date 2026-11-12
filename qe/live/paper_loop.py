@@ -273,38 +273,63 @@ def tick(stgy):
 
 
 
-def _mk_signal(df, name):
-    """按策略声明的信号口径算入场条件(与回测同一套定义)。df 需含 close/volume。"""
+def _mk_signal(df, name, series: bool = False):
+    """按策略声明的信号口径算入场条件(与回测同一套定义)。
+
+    series=True 返回**整段布尔序列**(供对账器重建基准);
+    默认只返回最后一根(实盘 tick 用)。
+    一份定义两处用,避免"实盘信号"和"对账基准"逻辑漂移。
+    """
+    import pandas as pd
+
     if df is None or len(df) < 30:
-        return False
+        return pd.Series(dtype=bool) if series else False
     c = df["close"]
     if name in ("rsi14<30", "rsi1430"):
         d = c.diff()
         up = d.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
         dn = (-d.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
         r = 100 - 100 / (1 + up / dn.replace(0, float("nan"))).fillna(50)
-        return bool(r.iloc[-1] < 30)
-    if name == "keltner":
+        cond = r < 30
+    elif name == "keltner":
         ema = c.ewm(span=20, adjust=False).mean()
         tr = (df["high"] - df["low"]).ewm(alpha=1 / 20, adjust=False).mean()
-        return bool(c.iloc[-1] < (ema - 2 * tr).iloc[-1])
-    if name == "vwap-2sd" and "volume" in df:
+        cond = c < (ema - 2 * tr)
+    elif name == "vwap-2sd" and "volume" in df:
         v = df["volume"]
         vwap = (c * v).rolling(288).sum() / v.rolling(288).sum()
         sd = c.rolling(288).std()
-        return bool(c.iloc[-1] < (vwap - 2 * sd).iloc[-1])
-    if name == "boll40x25":
+        cond = c < (vwap - 2 * sd)
+    elif name == "boll40x25":
         ma, sd = c.rolling(40).mean(), c.rolling(40).std()
-        return bool(c.iloc[-1] < (ma - 2.5 * sd).iloc[-1])
-    ma, sd = c.rolling(20).mean(), c.rolling(20).std()
-    return bool(c.iloc[-1] < (ma - 2 * sd).iloc[-1])
+        cond = c < (ma - 2.5 * sd)
+    else:
+        ma, sd = c.rolling(20).mean(), c.rolling(20).std()
+        cond = c < (ma - 2 * sd)
+    cond = cond.fillna(False).astype(bool)
+    return cond if series else bool(cond.iloc[-1])
 
 
-def _candles_df(coin, interval="5m", days=2):
+def _candles_df(coin, interval="5m", days=2, drop_forming=True):
+    """取 K 线;默认**丢掉正在形成的那根**。
+
+    为什么必须丢:HL 返回的最后一根是当前未收盘 bar,它的 close 是"现价"。
+    用它判信号 = 在 bar 还没收盘时做决定,回测里根本不存在这种信号
+    (对账器实测:不丢的话信号一致率只有 33%)。
+    """
     try:
-        return hl.candles(coin, interval, days)
+        df = hl.candles(coin, interval, days)
     except Exception:
         return None
+    if df is None or not len(df) or not drop_forming:
+        return df
+    interval_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000,
+                   "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}.get(interval, 300_000)
+    now_ms = int(time.time() * 1000)
+    last_start = int(df.index[-1].timestamp() * 1000)
+    if now_ms < last_start + interval_ms:      # 还没收盘
+        return df.iloc[:-1]
+    return df
 
 
 def tick_testnet_breakout(stgy):
