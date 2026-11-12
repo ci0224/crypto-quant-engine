@@ -66,8 +66,7 @@ def promote_paper(sid, note=""):
         raise KeyError(sid)
     if s["state"] != "reviewed":
         raise IllegalTransition(f"只有 reviewed 才能进纸交易(当前 {s['state']})")
-    registry.update(sid, state="paper")
-    registry.event(sid, "promote", note or "进入纸交易")
+    registry.transition(sid, s["state"], "paper", "promote", note or "进入纸交易")
     return registry.get(sid)
 
 
@@ -94,8 +93,7 @@ def paper_tick(sid, stats: dict, source: str = "api"):
                        f"手工写入达标但不推进状态(source={source});仅 loop 写入可用于审批")
         return registry.get(sid)
     if ok:
-        registry.update(sid, state="awaiting_approval")
-        registry.event(sid, "paper_pass",
+        registry.transition(sid, "paper", "awaiting_approval", "paper_pass",
                        f"days={stats.get('days')} trades={stats.get('trades')} "
                        f"mean={stats.get('mean_bp')}bp")
         return registry.get(sid)
@@ -137,14 +135,12 @@ def halt(sid, reason=""):
     s = registry.get(sid)
     if not s:
         raise KeyError(sid)
-    registry.update(sid, state="halted", note=reason)
-    registry.event(sid, "halt", reason)
+    registry.transition(sid, s["state"], "halted", "halt", reason, note=reason)
     return registry.get(sid)
 
 
 def retire(sid, reason=""):
-    registry.update(sid, state="retired", note=reason)
-    registry.event(sid, "retire", reason)
+    registry.transition(sid, s["state"], "retired", "retire", reason, note=reason)
     return registry.get(sid)
 
 def reset_paper(sid: str, note: str = ""):
@@ -154,8 +150,8 @@ def reset_paper(sid: str, note: str = ""):
         raise IllegalTransition(f"策略不存在: {sid}")
     if s["state"] not in ("paper", "awaiting_approval", "halted"):
         raise IllegalTransition(f"{s['state']} → paper(只有 paper/awaiting_approval/halted 可以退回纸交易)")
-    registry.update(sid, state="paper", paper_json=None)
-    registry.event(sid, "reset_paper", note or "退回纸交易,清空历史进度")
+    registry.transition(sid, s["state"], "paper", "reset_paper",
+                        note or "退回纸交易,清空历史进度", paper_json=None)
     return registry.get(sid)
 
 

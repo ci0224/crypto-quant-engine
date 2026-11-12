@@ -229,3 +229,56 @@ pipeline.reaudit(sid) → 用当前闸门重算;若在 paper/awaiting_approval/l
 **结论:不迁移。** 瓶颈不在引擎而在统计与容量层;自建栈已有真实资金费、预注册 OOS、逐笔台账、100% 信号对账 —— 迁移要 2-3 人月且丢掉已验证基线。
 
 **建议补的 5 个模块**:`walkforward`(purge/embargo)、`capacity`(impact = k·σ·√(Q/ADV))、`portfolio`(风险预算+换手惩罚)、`dq_gate`(完整性门禁)、`pbo/dsr`(已有 DSR)。
+
+
+---
+
+## 十三、中高风险项全部修完(收尾)
+
+### ① 哈希链(高)—— 防"先删触发器再改历史"
+
+触发器只能挡 DB 内的 UPDATE/DELETE;有写权限的人可以 `DROP TRIGGER` 再改,**触发器就失效了**。
+现在每条事件都串进哈希链:`hash = sha256(prev_hash|id|ts|sid|kind|detail)`。
+
+```
+回填 124 条 → verify_chain() = ✅ 完整
+写入新事件 → 链仍然完整 ✅
+篡改测试(先 DROP TRIGGER 再 UPDATE id=50)→ ✅ 在 id=50 发现断链
+```
+
+注意实现细节:**必须插入前算好 id 再算 hash**,否则"插入后 UPDATE hash"会被 append-only 触发器挡住。
+
+### ② 全部状态转移改原子(中)
+
+`promote_paper / paper_pass / halt / retire / reset_paper` 从"update + event 两个事务"改为
+`registry.transition()`(条件更新 `WHERE state=?` + 同事务写事件)。
+现在 `registry.update(sid, state=...)` 的调用数为 **0**。
+
+### ③ 容量:两个口径,别用错(中)
+
+| 口径 | 适用 | 实测 |
+|---|---|---|
+| **平方根冲击** `k·σ·√(Q/ADV)` | **taker** 进出 | BTC $4.9B —— 说明对 maker 完全无约束力 |
+| **maker 专用** P10(信号后 5 分钟成交额)×10% | 挂单在 −100bp | **BTC $1.74M / SOL $85K / ETH $613K** |
+
+**结论:容量不是我们的瓶颈**(单笔 $20-500 远低于 $85K 下限),**成交率才是**。
+新增 **G17**:单笔容量 ≥ $5,000。全部 18 条策略通过。
+
+### ④ Walk-forward(purge 30d / embargo 30d)(中)
+
+对横截面家族(8 币 × 参数网格 16 组)做真实"先选参数、再评估":
+
+| 测试年 | 训练选中的参数 | 训练 Sharpe | **测试 Sharpe** |
+|---|---|---|---|
+| 2022 | lb=60 k=4 | 1.49 | **-1.18** |
+| 2023 | lb=60 k=4 | 1.03 | +1.10 |
+| 2024 | lb=60 k=4 | 0.83 | +0.21 |
+| 2025 | lb=7 k=2 | 0.87 | +0.75 |
+
+**训练均值 1.05 → 测试均值 0.22(衰减 79%)。**
+这是"全样本调参"会骗人的实证:样本内 1.05 的夏普,换到未来只剩 0.22。
+
+### ⑤ 逐笔成本回归(中,部分覆盖)
+
+对账器已逐笔比对 `mean_diff`,ledger 每笔记录 `fee_bp / funding_bp / impact_bp`;
+**尚未**做"实际成交价 vs 挂单价"的逐笔回归(需要 testnet 积累样本后才有意义)。

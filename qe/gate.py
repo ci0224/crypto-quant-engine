@@ -11,7 +11,8 @@ from dataclasses import dataclass
 T_MIN = 2.0              # t 值下限(单策略;多策略同时检验需 Bonferroni 加严)
 CI_LOW_MIN = 0.0         # bootstrap CI 下界须 > 0
 COST_STRESS = 2.0        # 成本压测倍数
-MAE_BUFFER = 0.9         # MAE 须 < 强平距离 × 0.9(留 10% 缓冲,对齐你 11 号报告 3x 的 398bp 缓冲口径)
+MAE_BUFFER = 0.9
+CAP_MIN_USD = 5_000      # 单笔名义容量下限(低于此规模不值得上实盘)         # MAE 须 < 强平距离 × 0.9(留 10% 缓冲,对齐你 11 号报告 3x 的 398bp 缓冲口径)
 MIN_TRADES = 100
 MIN_DAYS = 730
 
@@ -109,6 +110,12 @@ def evaluate(metrics: dict, spec: dict) -> dict:
     dsr = deflated_sharpe(sr_pp, int(m.get("n_obs") or 1500),
                           n_trials, float(m.get("skew") or 0.0), float(m.get("kurt") or 3.0))
     add("G16", "Deflated Sharpe > 0.95", dsr > 0.95, f"DSR={dsr:.3f} (trials={n_trials})")
+
+    # G17 容量:单笔名义上限(metrics 里的 cap_usd,由 capacity.py 算出)
+    cap = m.get("cap_usd")
+    add("G17", f"单笔容量 >= ${CAP_MIN_USD:,}",
+        cap is not None and float(cap) >= CAP_MIN_USD,
+        f"cap=${cap:,.0f}" if cap is not None else "缺容量数据")
 
     passed = all(c.passed for c in checks)
     score = sum(c.passed for c in checks) / len(checks) if checks else 0.0
