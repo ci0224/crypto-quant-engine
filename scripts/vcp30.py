@@ -15,6 +15,10 @@ def vcp_sig(d, tight_pct=0.35, vol_mult=1.2, lookback=15, max_risk=0.12):
     sma50, sma200 = c.rolling(50).mean(), c.rolling(200).mean()
     amp20 = (h.rolling(20).max() - l.rolling(20).min()) / c
     trend = (c > sma200) & (sma200 > sma200.shift(20)) & (c > sma50)
+    import os
+    if os.environ.get("VCP_STRICT"):
+        hi252 = h.rolling(252).max(); lo252 = l.rolling(252).min()
+        trend = trend & (l > lo252 * 1.30) & (h > hi252 * 0.75)
     contracted = (pct_rank(amp20) < tight_pct).rolling(lookback).max().fillna(0) > 0
     brk = c > h.shift(1).rolling(20).max()
     volok = v > vol_mult * v.rolling(20).mean()
