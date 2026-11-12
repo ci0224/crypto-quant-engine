@@ -10,3 +10,8 @@ data/*.log
 secrets*
 data/pipeline.db*
 data/paper/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.lock
+data/*_watch.json
