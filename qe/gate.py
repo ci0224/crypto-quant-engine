@@ -94,7 +94,7 @@ def evaluate(metrics: dict, spec: dict) -> dict:
     hit = m.get("hit_rate")
     aw, al = m.get("avg_win_bp"), m.get("avg_loss_bp")
     if hit is not None:
-        rr = (aw / abs(al)) if (aw and al) else None
+        rr = (aw / abs(al)) if (aw and al) else m.get("payoff")
         ok = hit >= 0.5 or (rr is not None and rr >= 2.0)
         add("G10", "命中率 ≥ 50% 或 盈亏比 ≥ 2",
             ok, f"命中 {hit*100:.1f}%" + (f", 盈亏比 {rr:.2f}" if rr else ""))

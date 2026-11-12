@@ -43,7 +43,8 @@ def pct_rank(s: pd.Series, win: int = 100) -> pd.Series:
 
 def vcp_signal(d: pd.DataFrame, tight_pct: float = 0.20,
                bbw_pct: float = 0.30, atr_pct: float = 0.40,
-               vol_mult: float = 1.5, hi_frac: float = 0.75) -> pd.Series:
+               vol_mult: float = 1.5, hi_frac: float = 0.75,
+               trend_mode: str = "strict") -> pd.Series:
     """波动收缩用**自身历史分位**衡量(加密振幅远大于股票,绝对阈值会把样本清空)。"""
     c, h, l, v = d["close"], d["high"], d["low"], d["volume"]
     sma50, sma150, sma200 = (c.rolling(n).mean() for n in (50, 150, 200))
@@ -52,8 +53,10 @@ def vcp_signal(d: pd.DataFrame, tight_pct: float = 0.20,
     tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
     atrp = tr.rolling(14).mean() / c
     amp20 = (h.rolling(20).max() - l.rolling(20).min()) / c
-    trend = ((c > sma150) & (sma150 > sma200) & (sma200 > sma200.shift(20))
-             & (c > sma50) & (c >= 1.30 * lo252) & (c >= hi_frac * hi252))
+    if trend_mode == "loose":
+        trend = (c > sma200) & (sma200 > sma200.shift(20)) & (c > sma50)
+    else:
+        trend = ((c > sma150) & (sma150 > sma200) & (sma200 > sma200.shift(20))             & (c > sma50) & (c >= 1.30 * lo252) & (c >= hi_frac * hi252))
     contract = (pct_rank(bbw) < bbw_pct) & (pct_rank(atrp) < atr_pct)
     # VCP 的正确时序:过去 lookback 天内出现过"收缩",今天才突破
     contracted_recently = (pct_rank(amp20) < tight_pct).rolling(15).max().fillna(0) > 0
@@ -69,7 +72,7 @@ def simulate(d: pd.DataFrame, sig: pd.Series, target_r: float = 2.0,
     """状态机:入场次日收盘,止损/2R/SMA50 出场。"""
     c, l = d["close"].values, d["low"].values
     sma50 = d["close"].rolling(50).mean().values
-    stop_ref = d["low"].rolling(10).min().values
+    stop_ref = d["low"].rolling(5).min().values
     w = np.zeros(len(d))
     trades = []
     i, n = 0, len(d)
