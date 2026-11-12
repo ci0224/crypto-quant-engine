@@ -416,6 +416,15 @@ def tick_testnet(stgy):
     ex = _tn()
     st, path = _state(sid)
     st.setdefault("orders", {})
+    # 把在场挂单的价格写给 L2 录制器 → 价格逼近时自动切高频
+    try:
+        _watch = {c: (od or {}).get("limit") for c, od in (st.get("orders") or {}).items()
+                  if (od or {}).get("limit") and not (od or {}).get("filled")}
+        (Path(__file__).resolve().parent.parent.parent / "data" / "l2_watch.json").write_text(
+            json.dumps({k: float(v) for k, v in _watch.items()}))
+    except Exception:
+        pass
+
     ex.arm_deadman(120)                    # 进程崩溃 → 交易所侧自动撤单(死手开关)
     if not st.get("_orphan_checked"):
         _orphans(stgy, st)                 # 启动首轮清理交易所上的孤儿单
