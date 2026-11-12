@@ -44,7 +44,7 @@ def evaluate(metrics: dict, spec: dict) -> dict:
 
     # G1 声明前置(K6)
     lev = s.get("leverage")
-    hold = s.get("hold_horizon")
+    hold = s.get("hold_horizon") or s.get("hold_horizon_days") or s.get("hold_horizon_hours")
     add("G1", "声明完整(杠杆/持仓/成本)",
         bool(lev) and bool(hold) and s.get("cost_bps") is not None,
         f"lev={lev} hold={hold} cost={s.get('cost_bps')}bp")

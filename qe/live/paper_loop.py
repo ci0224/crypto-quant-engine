@@ -111,6 +111,9 @@ def _tn():
 def tick(stgy):
     sid, name, fam = stgy["id"], stgy["name"], stgy["family"]
     _sp = stgy.get("spec") or {}
+    if _sp.get("venue") in ("us_paper", "ibkr", "robinhood"):
+        from ..us.loop import tick as us_tick
+        return us_tick(stgy)
     if _sp.get("venue") == "testnet" and _sp.get("family") == "breakout":
         return tick_testnet_breakout(stgy)
     if _sp.get("venue") == "testnet":
